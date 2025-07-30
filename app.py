@@ -443,125 +443,161 @@ def main():
         **Versión 2.0** - Soporte para procesamiento múltiple de PDFs con descarga individual
         """)
     
-    archivo_pdf = st.file_uploader(
+    archivos_pdf = st.file_uploader(
         "📁 Selecciona uno o varios archivos PDF de extractos bancarios",
         type=['pdf'],
         help="Sube uno o múltiples archivos PDF de tus extractos bancarios",
         accept_multiple_files=True
     )
     
-    if archivo_pdf is not None:
-        st.success(f"✅ Archivo cargado: {archivo_pdf.name}")
+    if archivos_pdf is not None and len(archivos_pdf) > 0:
+        # Mostrar archivos seleccionados
+        st.success(f"✅ {len(archivos_pdf)} archivo(s) cargado(s):")
+        for i, pdf in enumerate(archivos_pdf, 1):
+            st.write(f"   {i}. {pdf.name}")
         
-        if st.button("🔄 Procesar PDF", type="primary"):
-            with st.spinner("Procesando archivo PDF..."):
-                extractor = ExtractorExtractoBancario()
+        if st.button("🔄 Procesar todos los PDFs", type="primary"):
+            resultados = []
+            
+            # Crear barra de progreso
+            progress_bar = st.progress(0)
+            status_text = st.empty()
+            
+            # Procesar cada PDF
+            for i, pdf in enumerate(archivos_pdf):
+                # Actualizar progreso
+                progress = (i + 1) / len(archivos_pdf)
+                progress_bar.progress(progress)
+                status_text.text(f"Procesando {pdf.name} ({i+1}/{len(archivos_pdf)})...")
                 
-                info_general, operaciones_fraccionadas, operaciones_periodo = extractor.procesar_pdf(archivo_pdf)
-                
-                if debug_mode:
-                    st.subheader("🔍 Información de Debug")
-                    st.write(f"Operaciones fraccionadas encontradas: {len(operaciones_fraccionadas)}")
-                    st.write(f"Operaciones del período encontradas: {len(operaciones_periodo)}")
-                    
-                    if operaciones_fraccionadas:
-                        st.write("Primeras operaciones fraccionadas:")
-                        st.json(operaciones_fraccionadas[:2])
-                
-                if info_general or operaciones_fraccionadas or operaciones_periodo:
-                    st.success("✅ PDF procesado exitosamente")
-                    
-                    if info_general:
-                        st.subheader("📋 Información General")
-                        col1, col2, col3 = st.columns(3)
+                try:
+                    with st.spinner(f"Procesando {pdf.name}..."):
+                        extractor = ExtractorExtractoBancario()
+                        info_general, operaciones_fraccionadas, operaciones_periodo = extractor.procesar_pdf(pdf)
                         
-                        with col1:
-                            if 'titular' in info_general:
-                                st.metric("Titular", info_general['titular'])
-                        
-                        with col2:
-                            if 'periodo_inicio' in info_general and 'periodo_fin' in info_general:
-                                st.metric("Período", f"{info_general['periodo_inicio']} - {info_general['periodo_fin']}")
-                        
-                        with col3:
-                            if 'limite_credito' in info_general:
-                                st.metric("Límite de Crédito", f"{info_general['limite_credito']} €")
-                    
-                    st.subheader("📊 Estadísticas")
-                    col1, col2, col3, col4 = st.columns(4)
-                    
-                    with col1:
-                        st.metric("Operaciones Fraccionadas", len(operaciones_fraccionadas))
-                    
-                    with col2:
-                        st.metric("Operaciones del Período", len(operaciones_periodo))
-                    
-                    with col3:
-                        if operaciones_fraccionadas:
-                            total_fraccionadas = sum(op.get('importe_operacion', 0) for op in operaciones_fraccionadas)
-                            st.metric("Total Fraccionadas", f"{total_fraccionadas:.2f} €")
-                    
-                    with col4:
-                        if operaciones_periodo:
-                            total_periodo = sum(op.get('importe', 0) for op in operaciones_periodo)
-                            st.metric("Total Período", f"{total_periodo:.2f} €")
-                    
-                    if operaciones_fraccionadas:
-                        st.subheader("💳 Operaciones Fraccionadas")
-                        df_fraccionadas = pd.DataFrame(operaciones_fraccionadas)
-                        st.dataframe(df_fraccionadas, use_container_width=True)
-                    else:
-                        st.warning("⚠️ No se encontraron operaciones fraccionadas en el PDF")
-                    
-                    if operaciones_periodo:
-                        st.subheader("🛒 Operaciones del Período")
-                        df_periodo = pd.DataFrame(operaciones_periodo)
-                        st.dataframe(df_periodo, use_container_width=True)
-                    else:
-                        st.warning("⚠️ No se encontraron operaciones del período en el PDF")
-                    
-                    st.subheader("📥 Descargar Excel")
-                    
-                    try:
+                        # Generar Excel para este PDF
                         excel_data = crear_excel(info_general, operaciones_fraccionadas, operaciones_periodo)
                         
-                        # Extraer fecha del nombre del archivo para el nombre de descarga
-                        nombre_archivo = "extractoTarjeta.xlsx"  # Nombre por defecto
-                        if archivo_pdf.name:
-                            # Buscar patrón de fecha al inicio del nombre del archivo
-                            fecha_match = re.match(r'^(\d{1,2}\s+\w{3}\s+\d{4})', archivo_pdf.name)
+                        # Generar nombre de archivo
+                        nombre_archivo = "extractoTarjeta.xlsx"
+                        if pdf.name:
+                            fecha_match = re.match(r'^(\d{1,2}\s+\w{3}\s+\d{4})', pdf.name)
                             if fecha_match:
                                 fecha_extraida = fecha_match.group(1)
                                 nombre_archivo = f"{fecha_extraida}_extractoTarjeta.xlsx"
                             else:
-                                # Intentar con formato alternativo
-                                fecha_match2 = re.search(r'(\d{1,2})\s*(\w{3})\s*(\d{4})', archivo_pdf.name)
+                                fecha_match2 = re.search(r'(\d{1,2})\s*(\w{3})\s*(\d{4})', pdf.name)
                                 if fecha_match2:
                                     dia = fecha_match2.group(1)
                                     mes = fecha_match2.group(2)
                                     año = fecha_match2.group(3)
                                     nombre_archivo = f"{dia} {mes} {año}_extractoTarjeta.xlsx"
+                                else:
+                                    # Usar nombre base del PDF si no se encuentra fecha
+                                    nombre_base = pdf.name.replace('.pdf', '').replace('.PDF', '')
+                                    nombre_archivo = f"{nombre_base}_extractoTarjeta.xlsx"
                         
-                        st.download_button(
-                            label="📊 Descargar archivo Excel",
-                            data=excel_data,
-                            file_name=nombre_archivo,
-                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-                        )
+                        resultado = {
+                            'nombre_pdf': pdf.name,
+                            'estado': 'success',
+                            'info_general': info_general,
+                            'operaciones_fraccionadas': operaciones_fraccionadas,
+                            'operaciones_periodo': operaciones_periodo,
+                            'excel_data': excel_data,
+                            'nombre_excel': nombre_archivo
+                        }
                         
-                        st.success("✅ Archivo Excel generado correctamente")
-                        
-                    except Exception as e:
-                        st.error(f"❌ Error al generar el archivo Excel: {str(e)}")
+                except Exception as e:
+                    resultado = {
+                        'nombre_pdf': pdf.name,
+                        'estado': 'error',
+                        'error': str(e),
+                        'info_general': {},
+                        'operaciones_fraccionadas': [],
+                        'operaciones_periodo': [],
+                        'excel_data': None,
+                        'nombre_excel': None
+                    }
                 
-                else:
-                    st.warning("⚠️ No se pudo extraer información del PDF. Verifique que el formato sea correcto.")
+                resultados.append(resultado)
+            
+            # Limpiar barra de progreso
+            progress_bar.empty()
+            status_text.empty()
+            
+            # Mostrar resultados
+            st.success(f"✅ Procesamiento completado de {len(archivos_pdf)} archivo(s)")
+            
+            # Estadísticas generales
+            exitosos = len([r for r in resultados if r['estado'] == 'success'])
+            errores = len([r for r in resultados if r['estado'] == 'error'])
+            
+            col1, col2 = st.columns(2)
+            with col1:
+                st.metric("📊 Procesados exitosamente", exitosos)
+            with col2:
+                st.metric("❌ Con errores", errores)
+            
+            # Mostrar resultados individuales
+            st.subheader("📋 Resultados por archivo")
+            
+            for resultado in resultados:
+                if resultado['estado'] == 'success':
+                    with st.container():
+                        st.markdown(f"### ✅ {resultado['nombre_pdf']}")
+                        
+                        # Métricas del archivo
+                        col1, col2, col3, col4 = st.columns(4)
+                        
+                        with col1:
+                            if 'titular' in resultado['info_general']:
+                                st.write(f"**Titular:** {resultado['info_general']['titular']}")
+                        
+                        with col2:
+                            if 'periodo_inicio' in resultado['info_general'] and 'periodo_fin' in resultado['info_general']:
+                                st.write(f"**Período:** {resultado['info_general']['periodo_inicio']} - {resultado['info_general']['periodo_fin']}")
+                        
+                        with col3:
+                            st.metric("Fraccionadas", len(resultado['operaciones_fraccionadas']))
+                        
+                        with col4:
+                            st.metric("Del Período", len(resultado['operaciones_periodo']))
+                        
+                        # Botón de descarga
+                        if resultado['excel_data']:
+                            st.download_button(
+                                label=f"📥 Descargar Excel - {resultado['nombre_excel']}",
+                                data=resultado['excel_data'],
+                                file_name=resultado['nombre_excel'],
+                                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                                key=f"download_{resultado['nombre_pdf']}"
+                            )
+                        
+                        # Debug info si está activado
+                        if debug_mode:
+                            with st.expander(f"🔍 Debug info para {resultado['nombre_pdf']}"):
+                                st.json({
+                                    'operaciones_fraccionadas': len(resultado['operaciones_fraccionadas']),
+                                    'operaciones_periodo': len(resultado['operaciones_periodo']),
+                                    'info_general': resultado['info_general']
+                                })
+                        
+                        st.markdown("---")
+                
+                else:  # Error
+                    with st.container():
+                        st.markdown(f"### ❌ {resultado['nombre_pdf']}")
+                        st.error(f"Error al procesar: {resultado['error']}")
+                        st.markdown("---")
+    
+    else:
+        st.info("👆 Selecciona uno o más archivos PDF para comenzar")
     
     st.markdown("---")
     st.markdown(
         """
         <div style='text-align: center; color: #666; font-size: 0.8em;'>
-        Convertidor de Extractos Bancarios v1.9 | Desarrollado con Streamlit por ROF
+        Convertidor de Extractos Bancarios v2.0 | Soporte múltiple PDFs | Desarrollado con Streamlit por ROF
         </div>
         """, 
         unsafe_allow_html=True
