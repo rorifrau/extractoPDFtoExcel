@@ -66,29 +66,91 @@ class ExtractorExtractoBancario:
         """Extrae operaciones fraccionadas del texto"""
         operaciones = []
         
-        # Buscar sección de operaciones fraccionadas
-        patron_seccion = r'IMPORTE OPERACIONES FRACCIONADAS.*?(?=OPERACIONES DE LA TARJETA|$)'
-        match_seccion = re.search(patron_seccion, texto, re.DOTALL | re.IGNORECASE)
+        # Debug: Mostrar texto para ver qué encuentra
+        if st.session_state.get('debug_mode', False):
+            st.text_area("Texto completo del PDF (debug)", texto[:2000], height=200)
         
-        if match_seccion:
-            seccion_texto = match_seccion.group(0)
+        # Buscar patrones específicos de operaciones fraccionadas
+        # Patrón mejorado que busca líneas con fechas seguidas de CAJ.LA CAIXA
+        lineas = texto.split('\n')
+        
+        for i, linea in enumerate(lineas):
+            # Buscar líneas que contengan fecha y CAJ.LA CAIXA
+            if re.search(r'\d{2}\.\d{2}\.\d{4}.*CAJ\.LA CAIXA', linea):
+                # Extraer información de esta línea y las siguientes
+                partes = linea.strip().split()
+                
+                if len(partes) >= 7:  # Fecha + concepto + varios números
+                    try:
+                        fecha = partes[0]
+                        concepto = ' '.join([p for p in partes[1:] if not re.match(r'\d+[,\.]\d{2}', p)][:3])
+                        
+                        # Buscar números en la línea
+                        numeros = [p.replace(',', '.') for p in partes if re.match(r'\d+[,\.]\d{2}', p)]
+                        
+                        if len(numeros) >= 5:
+                            # Buscar información adicional en líneas siguientes
+                            plazo = ""
+                            importe_pendiente_despues = 0.0
+                            
+                            # Revisar las siguientes líneas para encontrar plazo e importe pendiente después
+                            for j in range(i+1, min(i+4, len(lineas))):
+                                if "Plazo" in lineas[j]:
+                                    plazo_match = re.search(r'(\d+\s+De\s+\d+)', lineas[j])
+                                    if plazo_match:
+                                        plazo = plazo_match.group(1)
+                                
+                                if "Importe pendiente después" in lineas[j]:
+                                    siguiente_linea = j + 1
+                                    if siguiente_linea < len(lineas):
+                                        pendiente_match = re.search(r'(\d+[,\.]\d{2})', lineas[siguiente_linea])
+                                        if pendiente_match:
+                                            importe_pendiente_despues = float(pendiente_match.group(1).replace(',', '.'))
+                            
+                            operacion = {
+                                'fecha': fecha,
+                                'concepto': concepto.strip(),
+                                'importe_operacion': float(numeros[0]),
+                                'importe_pendiente': float(numeros[1]),
+                                'capital_amortizado': float(numeros[2]),
+                                'intereses': float(numeros[3]),
+                                'cuota_mensual': float(numeros[4]),
+                                'plazo': plazo,
+                                'importe_pendiente_despues': importe_pendiente_despues
+                            }
+                            operaciones.append(operacion)
+                            
+                    except (ValueError, IndexError) as e:
+                        # Si hay error en la conversión, continuar con la siguiente línea
+                        continue
+        
+        # Si no encontramos operaciones con el método anterior, intentar método alternativo
+        if not operaciones:
+            # Buscar sección específica de operaciones fraccionadas
+            patron_seccion = r'IMPORTE OPERACIONES FRACCIONADAS(.*?)(?=OPERACIONES DE LA TARJETA|TOTAL OPERACIONES FRACCIONADAS|$)'
+            match_seccion = re.search(patron_seccion, texto, re.DOTALL | re.IGNORECASE)
             
-            # Patrón para extraer cada operación fraccionada
-            patron_operacion = r'(\d{2}\.\d{2}\.\d{4})\s+(.*?)\s+(\d+[,\.]\d{2})\s+(\d+[,\.]\d{2})\s+(\d+[,\.]\d{2})\s+(\d+[,\.]\d{2})\s+(\d+[,\.]\d{2})'
-            
-            matches = re.findall(patron_operacion, seccion_texto)
-            
-            for match in matches:
-                operacion = {
-                    'fecha': match[0],
-                    'concepto': match[1].strip(),
-                    'importe_operacion': float(match[2].replace(',', '.')),
-                    'importe_pendiente': float(match[3].replace(',', '.')),
-                    'capital_amortizado': float(match[4].replace(',', '.')),
-                    'intereses': float(match[5].replace(',', '.')),
-                    'cuota_mensual': float(match[6].replace(',', '.'))
-                }
-                operaciones.append(operacion)
+            if match_seccion:
+                seccion_texto = match_seccion.group(1)
+                
+                # Patrón más flexible para operaciones fraccionadas
+                patron_operacion = r'(\d{2}\.\d{2}\.\d{4})\s+(CAJ\.LA CAIXA[^0-9]*)\s+(\d+[,\.]\d{2})\s+(\d+[,\.]\d{2})\s+(\d+[,\.]\d{2})\s+(\d+[,\.]\d{2})\s+(\d+[,\.]\d{2})'
+                
+                matches = re.findall(patron_operacion, seccion_texto)
+                
+                for match in matches:
+                    operacion = {
+                        'fecha': match[0],
+                        'concepto': match[1].strip(),
+                        'importe_operacion': float(match[2].replace(',', '.')),
+                        'importe_pendiente': float(match[3].replace(',', '.')),
+                        'capital_amortizado': float(match[4].replace(',', '.')),
+                        'intereses': float(match[5].replace(',', '.')),
+                        'cuota_mensual': float(match[6].replace(',', '.')),
+                        'plazo': '',
+                        'importe_pendiente_despues': 0.0
+                    }
+                    operaciones.append(operacion)
         
         return operaciones
     
@@ -300,7 +362,7 @@ def main():
     st.markdown(
         """
         <div style='text-align: center; color: #666; font-size: 0.8em;'>
-        Convertidor de Extractos Bancarios v1.0 | Desarrollado con Streamlit
+        Convertidor de Extractos Bancarios v1.2 | Desarrollado para Streamlit por ROF
         </div>
         """, 
         unsafe_allow_html=True
