@@ -440,13 +440,14 @@ def main():
         - Extractos de BBVA
         - PDFs con estructura similar
         
-        **Versión 1.9** - Nombres de archivo mejorados basados en la fecha del PDF
+        **Versión 2.0** - Soporte para procesamiento múltiple de PDFs con descarga individual
         """)
     
     archivo_pdf = st.file_uploader(
-        "📁 Selecciona el archivo PDF del extracto bancario",
+        "📁 Selecciona uno o varios archivos PDF de extractos bancarios",
         type=['pdf'],
-        help="Sube un archivo PDF de tu extracto bancario"
+        help="Sube uno o múltiples archivos PDF de tus extractos bancarios",
+        accept_multiple_files=True
     )
     
     if archivo_pdf is not None:
@@ -560,7 +561,7 @@ def main():
     st.markdown(
         """
         <div style='text-align: center; color: #666; font-size: 0.8em;'>
-        Convertidor de Extractos Bancarios v2.0 | Desarrollado con Streamlit por ROF
+        Convertidor de Extractos Bancarios v1.9 | Desarrollado con Streamlit por ROF
         </div>
         """, 
         unsafe_allow_html=True
