@@ -417,7 +417,7 @@ def crear_excel(info_general: Dict, operaciones_fraccionadas: List[Dict], operac
     return buffer.getvalue()
 
 def main():
-    st.title("📊 Convertidor de Extractos Bancarios PDF a Excel v1.9")
+    st.title("📊 Convertidor de Extractos Bancarios PDF a Excel v2.0")
     st.markdown("---")
     
     debug_mode = st.sidebar.checkbox("🔍 Modo Debug", help="Muestra información adicional para diagnóstico")
@@ -560,7 +560,7 @@ def main():
     st.markdown(
         """
         <div style='text-align: center; color: #666; font-size: 0.8em;'>
-        Convertidor de Extractos Bancarios v1.9 | Desarrollado con Streamlit por ROF
+        Convertidor de Extractos Bancarios v2.0 | Desarrollado con Streamlit por ROF
         </div>
         """, 
         unsafe_allow_html=True
