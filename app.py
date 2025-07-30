@@ -248,6 +248,8 @@ def main():
     with st.expander("ℹ️ Información de la aplicación"):
         st.markdown("""
         Esta aplicación permite convertir extractos bancarios en formato PDF a archivos Excel organizados.
+
+        versión 1.1
         
         **Características:**
         - Extrae información general (titular, período, límite de crédito)
