@@ -62,13 +62,16 @@ class ExtractorExtractoBancario:
         
         return info
     
-    def extraer_operaciones_fraccionadas(self, texto: str) -> List[Dict]:
+    def extraer_operaciones_fraccionadas(self, texto: str, pdf_id: str = "default") -> List[Dict]:
         """Extrae operaciones fraccionadas del texto"""
         operaciones = []
         
         # Debug: Mostrar fragmento del texto
         if st.session_state.get('debug_mode', False):
-            st.text_area("🔍 Fragmento del texto extraído (primeros 2000 caracteres)", texto[:2000], height=200)
+            st.text_area("🔍 Fragmento del texto extraído (primeros 2000 caracteres)", 
+                        texto[:2000], 
+                        height=200,
+                        key=f"debug_texto_extraido_{pdf_id}")
         
         # Método 1: Buscar operaciones en formato de líneas individuales (BBVA)
         lineas = texto.split('\n')
@@ -364,8 +367,11 @@ class ExtractorExtractoBancario:
         if not texto:
             return {}, [], []
         
+        # Crear un ID único para este PDF basado en su nombre
+        pdf_id = archivo_pdf.name.replace('.pdf', '').replace('.PDF', '').replace(' ', '_').replace('-', '_')
+        
         info_general = self.extraer_informacion_general(texto)
-        operaciones_fraccionadas = self.extraer_operaciones_fraccionadas(texto)
+        operaciones_fraccionadas = self.extraer_operaciones_fraccionadas(texto, pdf_id)
         operaciones_periodo = self.extraer_operaciones_periodo(texto)
         
         return info_general, operaciones_fraccionadas, operaciones_periodo
@@ -417,7 +423,7 @@ def crear_excel(info_general: Dict, operaciones_fraccionadas: List[Dict], operac
     return buffer.getvalue()
 
 def main():
-    st.title("📊 Convertidor de Extractos Bancarios PDF a Excel v2.2")
+    st.title("📊 Convertidor de Extractos Bancarios PDF a Excel v2.3")
     st.markdown("---")
     
     # Inicializar session_state para resultados
@@ -446,7 +452,7 @@ def main():
         - Extractos de BBVA
         - PDFs con estructura similar
         
-        **Versión 2.1** - Corregida persistencia de resultados tras descarga de archivos
+        **Versión 2.3** - Solucionado definitivamente error de IDs duplicados en elementos debug
         """)
     
     archivos_pdf = st.file_uploader(
@@ -465,9 +471,18 @@ def main():
     
     if archivos_pdf is not None and len(archivos_pdf) > 0:
         # Mostrar archivos seleccionados
-        st.success(f"✅ {len(archivos_pdf)} archivo(s) cargado(s):")
-        for i, pdf in enumerate(archivos_pdf, 1):
-            st.write(f"   {i}. {pdf.name}")
+        col1, col2 = st.columns([3, 1])
+        with col1:
+            st.success(f"✅ {len(archivos_pdf)} archivo(s) cargado(s):")
+            for i, pdf in enumerate(archivos_pdf, 1):
+                st.write(f"   {i}. {pdf.name}")
+        
+        with col2:
+            if st.button("🗑️ Limpiar archivos", type="secondary", help="Eliminar todos los archivos y resultados"):
+                # Limpiar session state
+                st.session_state.resultados_procesamiento = []
+                st.session_state.archivos_procesados = []
+                st.rerun()
         
         # Botón para procesar (solo si no hay resultados o han cambiado los archivos)
         if len(st.session_state.resultados_procesamiento) == 0:
@@ -626,7 +641,7 @@ def main():
     st.markdown(
         """
         <div style='text-align: center; color: #666; font-size: 0.8em;'>
-        Convertidor de Extractos Bancarios v2.1 | Soporte múltiple PDFs | Desarrollado con Streamlit por ROF
+        Convertidor de Extractos Bancarios v2.3 | Soporte múltiple PDFs | Desarrollado con Streamlit por ROF
         </div>
         """, 
         unsafe_allow_html=True
