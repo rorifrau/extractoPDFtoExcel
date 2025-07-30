@@ -285,12 +285,23 @@ class ExtractorExtractoBancario:
                 try:
                     importe = float(importe_str.replace(',', '.'))
                     
+                    # Buscar "Importe servicios" en la línea
+                    importe_servicios = 0.0
+                    if "Importe servicios" in linea or "servicios:" in linea:
+                        servicios_match = re.search(r'servicios:?\s*(\d+[,\.]\d{2})', linea, re.IGNORECASE)
+                        if servicios_match:
+                            try:
+                                importe_servicios = float(servicios_match.group(1).replace(',', '.'))
+                            except ValueError:
+                                pass
+                    
                     if len(establecimiento) > 3 and len(localidad) > 2:
                         operacion = {
                             'fecha': fecha,
                             'establecimiento': establecimiento,
                             'localidad': localidad,
-                            'importe': importe
+                            'importe': importe,
+                            'importe_servicios': importe_servicios
                         }
                         operaciones.append(operacion)
                         
@@ -319,8 +330,238 @@ class ExtractorExtractoBancario:
                         if len(partes) >= 4:
                             try:
                                 fecha = partes[0]
-                                patron_num = r'^\d+[,\.]\d{2}$'
+                                patron_num = r'^\d+[,\.]\d{2}
+                                        
+                            except (ValueError, IndexError):
+                                continue
+        
+        if st.session_state.get('debug_mode', False):
+            st.write(f"🔢 Total operaciones del período encontradas: {len(operaciones)}")
+        
+        return operaciones
+    
+    def procesar_pdf(self, archivo_pdf) -> Tuple[Dict, List[Dict], List[Dict]]:
+        """Procesa el PDF completo y extrae toda la información"""
+        texto = self.extraer_texto_pdf(archivo_pdf)
+        
+        if not texto:
+            return {}, [], []
+        
+        info_general = self.extraer_informacion_general(texto)
+        operaciones_fraccionadas = self.extraer_operaciones_fraccionadas(texto)
+        operaciones_periodo = self.extraer_operaciones_periodo(texto)
+        
+        return info_general, operaciones_fraccionadas, operaciones_periodo
+
+def crear_excel(info_general: Dict, operaciones_fraccionadas: List[Dict], operaciones_periodo: List[Dict]) -> bytes:
+    """Crea un archivo Excel con los datos extraídos"""
+    
+    buffer = io.BytesIO()
+    
+    with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
+        resumen_data = []
+        resumen_data.append(['EXTRACTO BANCARIO MYCARD'])
+        resumen_data.append([''])
+        
+        if 'periodo_inicio' in info_general and 'periodo_fin' in info_general:
+            resumen_data.append(['Período', f"{info_general['periodo_inicio']} - {info_general['periodo_fin']}"])
+        
+        if 'titular' in info_general:
+            resumen_data.append(['Titular', info_general['titular']])
+        
+        if 'limite_credito' in info_general:
+            resumen_data.append(['Límite de crédito', f"{info_general['limite_credito']} €"])
+        
+        resumen_data.append([''])
+        resumen_data.append(['RESUMEN'])
+        resumen_data.append(['Operaciones Fraccionadas', len(operaciones_fraccionadas)])
+        resumen_data.append(['Operaciones del Período', len(operaciones_periodo)])
+        
+        if operaciones_fraccionadas:
+            total_fraccionadas = sum(op.get('importe_operacion', 0) for op in operaciones_fraccionadas)
+            resumen_data.append(['Total Fraccionadas', f"{total_fraccionadas:.2f} €"])
+        
+        if operaciones_periodo:
+            total_periodo = sum(op.get('importe', 0) for op in operaciones_periodo)
+            resumen_data.append(['Total Período', f"{total_periodo:.2f} €"])
+        
+        df_resumen = pd.DataFrame(resumen_data)
+        df_resumen.to_excel(writer, sheet_name='Resumen', index=False, header=False)
+        
+        if operaciones_fraccionadas:
+            df_fraccionadas = pd.DataFrame(operaciones_fraccionadas)
+            df_fraccionadas.to_excel(writer, sheet_name='Operaciones Fraccionadas', index=False)
+        
+        if operaciones_periodo:
+            df_periodo = pd.DataFrame(operaciones_periodo)
+            df_periodo.to_excel(writer, sheet_name='Operaciones Período', index=False)
+    
+    buffer.seek(0)
+    return buffer.getvalue()
+
+def main():
+    st.title("📊 Convertidor de Extractos Bancarios PDF a Excel v1.9")
+    st.markdown("---")
+    
+    debug_mode = st.sidebar.checkbox("🔍 Modo Debug", help="Muestra información adicional para diagnóstico")
+    if 'debug_mode' not in st.session_state:
+        st.session_state['debug_mode'] = False
+    st.session_state['debug_mode'] = debug_mode
+    
+    with st.expander("ℹ️ Información de la aplicación"):
+        st.markdown("""
+        Esta aplicación permite convertir extractos bancarios en formato PDF a archivos Excel organizados.
+        
+        **Características:**
+        - Extrae información general (titular, período, límite de crédito)
+        - Procesa operaciones fraccionadas (BBVA, CaixaBank, etc.)
+        - Procesa operaciones del período
+        - Genera un archivo Excel con múltiples hojas
+        
+        **Formatos soportados:**
+        - Extractos bancarios MyCard de CaixaBank
+        - Extractos de BBVA
+        - PDFs con estructura similar
+        
+        **Versión 1.9** - Agregada columna "Importe servicios" y nombres de archivo mejorados
+        """)
+    
+    archivo_pdf = st.file_uploader(
+        "📁 Selecciona el archivo PDF del extracto bancario",
+        type=['pdf'],
+        help="Sube un archivo PDF de tu extracto bancario"
+    )
+    
+    if archivo_pdf is not None:
+        st.success(f"✅ Archivo cargado: {archivo_pdf.name}")
+        
+        if st.button("🔄 Procesar PDF", type="primary"):
+            with st.spinner("Procesando archivo PDF..."):
+                extractor = ExtractorExtractoBancario()
+                
+                info_general, operaciones_fraccionadas, operaciones_periodo = extractor.procesar_pdf(archivo_pdf)
+                
+                if debug_mode:
+                    st.subheader("🔍 Información de Debug")
+                    st.write(f"Operaciones fraccionadas encontradas: {len(operaciones_fraccionadas)}")
+                    st.write(f"Operaciones del período encontradas: {len(operaciones_periodo)}")
+                    
+                    if operaciones_fraccionadas:
+                        st.write("Primeras operaciones fraccionadas:")
+                        st.json(operaciones_fraccionadas[:2])
+                
+                if info_general or operaciones_fraccionadas or operaciones_periodo:
+                    st.success("✅ PDF procesado exitosamente")
+                    
+                    if info_general:
+                        st.subheader("📋 Información General")
+                        col1, col2, col3 = st.columns(3)
+                        
+                        with col1:
+                            if 'titular' in info_general:
+                                st.metric("Titular", info_general['titular'])
+                        
+                        with col2:
+                            if 'periodo_inicio' in info_general and 'periodo_fin' in info_general:
+                                st.metric("Período", f"{info_general['periodo_inicio']} - {info_general['periodo_fin']}")
+                        
+                        with col3:
+                            if 'limite_credito' in info_general:
+                                st.metric("Límite de Crédito", f"{info_general['limite_credito']} €")
+                    
+                    st.subheader("📊 Estadísticas")
+                    col1, col2, col3, col4 = st.columns(4)
+                    
+                    with col1:
+                        st.metric("Operaciones Fraccionadas", len(operaciones_fraccionadas))
+                    
+                    with col2:
+                        st.metric("Operaciones del Período", len(operaciones_periodo))
+                    
+                    with col3:
+                        if operaciones_fraccionadas:
+                            total_fraccionadas = sum(op.get('importe_operacion', 0) for op in operaciones_fraccionadas)
+                            st.metric("Total Fraccionadas", f"{total_fraccionadas:.2f} €")
+                    
+                    with col4:
+                        if operaciones_periodo:
+                            total_periodo = sum(op.get('importe', 0) for op in operaciones_periodo)
+                            st.metric("Total Período", f"{total_periodo:.2f} €")
+                    
+                    if operaciones_fraccionadas:
+                        st.subheader("💳 Operaciones Fraccionadas")
+                        df_fraccionadas = pd.DataFrame(operaciones_fraccionadas)
+                        st.dataframe(df_fraccionadas, use_container_width=True)
+                    else:
+                        st.warning("⚠️ No se encontraron operaciones fraccionadas en el PDF")
+                    
+                    if operaciones_periodo:
+                        st.subheader("🛒 Operaciones del Período")
+                        df_periodo = pd.DataFrame(operaciones_periodo)
+                        st.dataframe(df_periodo, use_container_width=True)
+                    else:
+                        st.warning("⚠️ No se encontraron operaciones del período en el PDF")
+                    
+                    st.subheader("📥 Descargar Excel")
+                    
+                    try:
+                        excel_data = crear_excel(info_general, operaciones_fraccionadas, operaciones_periodo)
+                        
+                        # Extraer fecha del nombre del archivo si es posible
+                        nombre_base = "ExtractoBancario"
+                        if archivo_pdf.name:
+                            # Buscar patrón de fecha en el nombre del archivo
+                            fecha_match = re.search(r'(\d{1,2})\s*(\w{3})\s*(\d{4})', archivo_pdf.name)
+                            if fecha_match:
+                                dia = fecha_match.group(1).zfill(2)
+                                mes = fecha_match.group(2)
+                                año = fecha_match.group(3)
+                                nombre_base = f"{dia} {mes} {año}_ExtractoBancario"
+                            else:
+                                # Si no encuentra fecha en el nombre, usar fecha actual
+                                fecha_actual = datetime.now().strftime("%d %b %Y")
+                                nombre_base = f"{fecha_actual}_ExtractoBancario"
+                        
+                        nombre_archivo = f"{nombre_base}.xlsx"
+                        
+                        st.download_button(
+                            label="📊 Descargar archivo Excel",
+                            data=excel_data,
+                            file_name=nombre_archivo,
+                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                        )
+                        
+                        st.success("✅ Archivo Excel generado correctamente")
+                        
+                    except Exception as e:
+                        st.error(f"❌ Error al generar el archivo Excel: {str(e)}")
+                
+                else:
+                    st.warning("⚠️ No se pudo extraer información del PDF. Verifique que el formato sea correcto.")
+    
+    st.markdown("---")
+    st.markdown(
+        """
+        <div style='text-align: center; color: #666; font-size: 0.8em;'>
+        Convertidor de Extractos Bancarios v1.9 | Desarrollado con Streamlit por ROF
+        </div>
+        """, 
+        unsafe_allow_html=True
+    )
+
+if __name__ == "__main__":
+    main()
                                 importe_candidatos = [p for p in partes if re.match(patron_num, p)]
+                                
+                                # Buscar "Importe servicios" en la línea
+                                importe_servicios = 0.0
+                                if "Importe servicios" in linea or "servicios:" in linea:
+                                    servicios_match = re.search(r'servicios:?\s*(\d+[,\.]\d{2})', linea, re.IGNORECASE)
+                                    if servicios_match:
+                                        try:
+                                            importe_servicios = float(servicios_match.group(1).replace(',', '.'))
+                                        except ValueError:
+                                            pass
                                 
                                 if importe_candidatos:
                                     importe = float(importe_candidatos[-1].replace(',', '.'))
@@ -336,7 +577,8 @@ class ExtractorExtractoBancario:
                                             'fecha': fecha,
                                             'establecimiento': establecimiento.strip(),
                                             'localidad': localidad.strip(),
-                                            'importe': importe
+                                            'importe': importe,
+                                            'importe_servicios': importe_servicios
                                         }
                                         
                                         es_duplicado = any(
