@@ -417,8 +417,14 @@ def crear_excel(info_general: Dict, operaciones_fraccionadas: List[Dict], operac
     return buffer.getvalue()
 
 def main():
-    st.title("📊 Convertidor de Extractos Bancarios PDF a Excel v2.0")
+    st.title("📊 Convertidor de Extractos Bancarios PDF a Excel v2.1")
     st.markdown("---")
+    
+    # Inicializar session_state para resultados
+    if 'resultados_procesamiento' not in st.session_state:
+        st.session_state.resultados_procesamiento = []
+    if 'archivos_procesados' not in st.session_state:
+        st.session_state.archivos_procesados = []
     
     debug_mode = st.sidebar.checkbox("🔍 Modo Debug", help="Muestra información adicional para diagnóstico")
     if 'debug_mode' not in st.session_state:
@@ -440,7 +446,7 @@ def main():
         - Extractos de BBVA
         - PDFs con estructura similar
         
-        **Versión 2.0** - Soporte para procesamiento múltiple de PDFs con descarga individual
+        **Versión 2.1** - Corregida persistencia de resultados tras descarga de archivos
         """)
     
     archivos_pdf = st.file_uploader(
@@ -450,82 +456,105 @@ def main():
         accept_multiple_files=True
     )
     
+    # Verificar si los archivos han cambiado
+    archivos_actuales = [pdf.name for pdf in archivos_pdf] if archivos_pdf else []
+    if archivos_actuales != st.session_state.archivos_procesados:
+        # Los archivos han cambiado, limpiar resultados anteriores
+        st.session_state.resultados_procesamiento = []
+        st.session_state.archivos_procesados = archivos_actuales
+    
     if archivos_pdf is not None and len(archivos_pdf) > 0:
         # Mostrar archivos seleccionados
         st.success(f"✅ {len(archivos_pdf)} archivo(s) cargado(s):")
         for i, pdf in enumerate(archivos_pdf, 1):
             st.write(f"   {i}. {pdf.name}")
         
-        if st.button("🔄 Procesar todos los PDFs", type="primary"):
-            resultados = []
-            
-            # Crear barra de progreso
-            progress_bar = st.progress(0)
-            status_text = st.empty()
-            
-            # Procesar cada PDF
-            for i, pdf in enumerate(archivos_pdf):
-                # Actualizar progreso
-                progress = (i + 1) / len(archivos_pdf)
-                progress_bar.progress(progress)
-                status_text.text(f"Procesando {pdf.name} ({i+1}/{len(archivos_pdf)})...")
+        # Botón para procesar (solo si no hay resultados o han cambiado los archivos)
+        if len(st.session_state.resultados_procesamiento) == 0:
+            if st.button("🔄 Procesar todos los PDFs", type="primary"):
+                resultados = []
                 
-                try:
-                    with st.spinner(f"Procesando {pdf.name}..."):
-                        extractor = ExtractorExtractoBancario()
-                        info_general, operaciones_fraccionadas, operaciones_periodo = extractor.procesar_pdf(pdf)
-                        
-                        # Generar Excel para este PDF
-                        excel_data = crear_excel(info_general, operaciones_fraccionadas, operaciones_periodo)
-                        
-                        # Generar nombre de archivo
-                        nombre_archivo = "extractoTarjeta.xlsx"
-                        if pdf.name:
-                            fecha_match = re.match(r'^(\d{1,2}\s+\w{3}\s+\d{4})', pdf.name)
-                            if fecha_match:
-                                fecha_extraida = fecha_match.group(1)
-                                nombre_archivo = f"{fecha_extraida}_extractoTarjeta.xlsx"
-                            else:
-                                fecha_match2 = re.search(r'(\d{1,2})\s*(\w{3})\s*(\d{4})', pdf.name)
-                                if fecha_match2:
-                                    dia = fecha_match2.group(1)
-                                    mes = fecha_match2.group(2)
-                                    año = fecha_match2.group(3)
-                                    nombre_archivo = f"{dia} {mes} {año}_extractoTarjeta.xlsx"
+                # Crear barra de progreso
+                progress_bar = st.progress(0)
+                status_text = st.empty()
+                
+                # Procesar cada PDF
+                for i, pdf in enumerate(archivos_pdf):
+                    # Actualizar progreso
+                    progress = (i + 1) / len(archivos_pdf)
+                    progress_bar.progress(progress)
+                    status_text.text(f"Procesando {pdf.name} ({i+1}/{len(archivos_pdf)})...")
+                    
+                    try:
+                        with st.spinner(f"Procesando {pdf.name}..."):
+                            extractor = ExtractorExtractoBancario()
+                            info_general, operaciones_fraccionadas, operaciones_periodo = extractor.procesar_pdf(pdf)
+                            
+                            # Generar Excel para este PDF
+                            excel_data = crear_excel(info_general, operaciones_fraccionadas, operaciones_periodo)
+                            
+                            # Generar nombre de archivo
+                            nombre_archivo = "extractoTarjeta.xlsx"
+                            if pdf.name:
+                                fecha_match = re.match(r'^(\d{1,2}\s+\w{3}\s+\d{4})', pdf.name)
+                                if fecha_match:
+                                    fecha_extraida = fecha_match.group(1)
+                                    nombre_archivo = f"{fecha_extraida}_extractoTarjeta.xlsx"
                                 else:
-                                    # Usar nombre base del PDF si no se encuentra fecha
-                                    nombre_base = pdf.name.replace('.pdf', '').replace('.PDF', '')
-                                    nombre_archivo = f"{nombre_base}_extractoTarjeta.xlsx"
-                        
+                                    fecha_match2 = re.search(r'(\d{1,2})\s*(\w{3})\s*(\d{4})', pdf.name)
+                                    if fecha_match2:
+                                        dia = fecha_match2.group(1)
+                                        mes = fecha_match2.group(2)
+                                        año = fecha_match2.group(3)
+                                        nombre_archivo = f"{dia} {mes} {año}_extractoTarjeta.xlsx"
+                                    else:
+                                        # Usar nombre base del PDF si no se encuentra fecha
+                                        nombre_base = pdf.name.replace('.pdf', '').replace('.PDF', '')
+                                        nombre_archivo = f"{nombre_base}_extractoTarjeta.xlsx"
+                            
+                            resultado = {
+                                'nombre_pdf': pdf.name,
+                                'estado': 'success',
+                                'info_general': info_general,
+                                'operaciones_fraccionadas': operaciones_fraccionadas,
+                                'operaciones_periodo': operaciones_periodo,
+                                'excel_data': excel_data,
+                                'nombre_excel': nombre_archivo
+                            }
+                            
+                    except Exception as e:
                         resultado = {
                             'nombre_pdf': pdf.name,
-                            'estado': 'success',
-                            'info_general': info_general,
-                            'operaciones_fraccionadas': operaciones_fraccionadas,
-                            'operaciones_periodo': operaciones_periodo,
-                            'excel_data': excel_data,
-                            'nombre_excel': nombre_archivo
+                            'estado': 'error',
+                            'error': str(e),
+                            'info_general': {},
+                            'operaciones_fraccionadas': [],
+                            'operaciones_periodo': [],
+                            'excel_data': None,
+                            'nombre_excel': None
                         }
-                        
-                except Exception as e:
-                    resultado = {
-                        'nombre_pdf': pdf.name,
-                        'estado': 'error',
-                        'error': str(e),
-                        'info_general': {},
-                        'operaciones_fraccionadas': [],
-                        'operaciones_periodo': [],
-                        'excel_data': None,
-                        'nombre_excel': None
-                    }
+                    
+                    resultados.append(resultado)
                 
-                resultados.append(resultado)
+                # Guardar resultados en session_state
+                st.session_state.resultados_procesamiento = resultados
+                
+                # Limpiar barra de progreso
+                progress_bar.empty()
+                status_text.empty()
+                
+                # Forzar rerun para mostrar resultados
+                st.rerun()
+        
+        # Mostrar resultados si existen
+        if len(st.session_state.resultados_procesamiento) > 0:
+            resultados = st.session_state.resultados_procesamiento
             
-            # Limpiar barra de progreso
-            progress_bar.empty()
-            status_text.empty()
+            # Botón para procesar de nuevo
+            if st.button("🔄 Procesar nuevamente", type="secondary"):
+                st.session_state.resultados_procesamiento = []
+                st.rerun()
             
-            # Mostrar resultados
             st.success(f"✅ Procesamiento completado de {len(archivos_pdf)} archivo(s)")
             
             # Estadísticas generales
@@ -570,7 +599,7 @@ def main():
                                 data=resultado['excel_data'],
                                 file_name=resultado['nombre_excel'],
                                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                                key=f"download_{resultado['nombre_pdf']}"
+                                key=f"download_{resultado['nombre_pdf']}_{hash(resultado['nombre_pdf'])}"
                             )
                         
                         # Debug info si está activado
@@ -597,7 +626,7 @@ def main():
     st.markdown(
         """
         <div style='text-align: center; color: #666; font-size: 0.8em;'>
-        Convertidor de Extractos Bancarios v2.0 | Soporte múltiple PDFs | Desarrollado con Streamlit por ROF
+        Convertidor de Extractos Bancarios v2.1 | Soporte múltiple PDFs | Desarrollado con Streamlit por ROF
         </div>
         """, 
         unsafe_allow_html=True
