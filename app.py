@@ -417,7 +417,7 @@ def crear_excel(info_general: Dict, operaciones_fraccionadas: List[Dict], operac
     return buffer.getvalue()
 
 def main():
-    st.title("📊 Convertidor de Extractos Bancarios PDF a Excel v2.1")
+    st.title("📊 Convertidor de Extractos Bancarios PDF a Excel v2.2")
     st.markdown("---")
     
     # Inicializar session_state para resultados
