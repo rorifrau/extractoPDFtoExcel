@@ -462,11 +462,20 @@ def main():
         **Versión 2.4** - Mejorado debug, corregida extracción fraccionadas, botón limpiar completo y marcador de descargados
         """)
     
+    # Manejar limpieza de archivos
+    if st.session_state.limpiar_archivos:
+        st.session_state.resultados_procesamiento = []
+        st.session_state.archivos_procesados = []
+        st.session_state.archivos_descargados = set()
+        st.session_state.limpiar_archivos = False
+        st.rerun()
+    
     archivos_pdf = st.file_uploader(
         "📁 Selecciona uno o varios archivos PDF de extractos bancarios",
         type=['pdf'],
         help="Sube uno o múltiples archivos PDF de tus extractos bancarios",
-        accept_multiple_files=True
+        accept_multiple_files=True,
+        key="file_uploader_main"
     )
     
     # Verificar si los archivos han cambiado
@@ -485,10 +494,9 @@ def main():
                 st.write(f"   {i}. {pdf.name}")
         
         with col2:
-            if st.button("🗑️ Limpiar archivos", type="secondary", help="Eliminar todos los archivos y resultados"):
-                # Limpiar session state
-                st.session_state.resultados_procesamiento = []
-                st.session_state.archivos_procesados = []
+            if st.button("🗑️ Limpiar todo", type="secondary", help="Eliminar todos los archivos y resultados completamente"):
+                # Marcar para limpieza completa en la próxima ejecución
+                st.session_state.limpiar_archivos = True
                 st.rerun()
         
         # Botón para procesar (solo si no hay resultados o han cambiado los archivos)
@@ -614,15 +622,27 @@ def main():
                         with col4:
                             st.metric("Del Período", len(resultado['operaciones_periodo']))
                         
-                        # Botón de descarga
+                        # Botón de descarga con estado
                         if resultado['excel_data']:
-                            st.download_button(
-                                label=f"📥 Descargar Excel - {resultado['nombre_excel']}",
+                            archivo_descargado = resultado['nombre_pdf'] in st.session_state.archivos_descargados
+                            
+                            if archivo_descargado:
+                                # Mostrar como descargado
+                                st.success("✅ Descargado")
+                                if st.button(f"📥 Volver a descargar - {resultado['nombre_excel']}", 
+                                           key=f"redownload_{resultado['nombre_pdf']}_{hash(resultado['nombre_pdf'])}"):
+                                    pass  # El botón download_button se encargará
+                            
+                            # Botón de descarga (siempre presente)
+                            if st.download_button(
+                                label=f"📥 {'Descargar de nuevo' if archivo_descargado else 'Descargar Excel'} - {resultado['nombre_excel']}",
                                 data=resultado['excel_data'],
                                 file_name=resultado['nombre_excel'],
                                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                                 key=f"download_{resultado['nombre_pdf']}_{hash(resultado['nombre_pdf'])}"
-                            )
+                            ):
+                                # Marcar como descargado
+                                st.session_state.archivos_descargados.add(resultado['nombre_pdf'])
                         
                         # Debug info si está activado
                         if debug_mode:
@@ -648,7 +668,7 @@ def main():
     st.markdown(
         """
         <div style='text-align: center; color: #666; font-size: 0.8em;'>
-        Convertidor de Extractos Bancarios v2.3 | Soporte múltiple PDFs | Desarrollado con Streamlit por ROF
+        Convertidor de Extractos Bancarios v2.4 | Soporte múltiple PDFs | Desarrollado con Streamlit por ROF
         </div>
         """, 
         unsafe_allow_html=True
