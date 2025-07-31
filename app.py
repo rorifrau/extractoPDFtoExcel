@@ -382,7 +382,7 @@ def crear_excel(info_general: Dict, operaciones_fraccionadas: List[Dict], operac
     return buffer.getvalue()
 
 def reiniciar_aplicacion():
-    """TEMPORAL - Se moverá a utils.py"""
+    """TEMPORAL - Se moverá a utils.py - VERSIÓN COMPLETA"""
     keys_to_clear = [
         'resultados_procesamiento',
         'archivos_procesados', 
@@ -394,6 +394,8 @@ def reiniciar_aplicacion():
         if key in st.session_state:
             del st.session_state[key]
     
+    # IMPORTANTE: También limpiar el widget file_uploader
+    # Forzar la recarga de la página completa
     st.rerun()
 
 def main():
