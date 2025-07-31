@@ -4,8 +4,13 @@ import pdfplumber
 import re
 from datetime import datetime
 import io
-import base64
 from typing import Dict, List, Tuple, Optional
+
+# Imports de nuestros módulos especializados
+# from operaciones_fraccionadas import extraer_operaciones_fraccionadas_avanzado
+# from utils import crear_excel, generar_nombre_archivo_excel, mostrar_debug_completo, reiniciar_aplicacion, inicializar_sesion
+
+# NOTA: Para usar los módulos, descomenta las líneas de arriba y comenta las funciones temporales de abajo
 
 # Configuración de la página
 st.set_page_config(
@@ -76,168 +81,114 @@ class ExtractorExtractoBancario:
         return info
     
     def extraer_operaciones_fraccionadas(self, texto: str, pdf_id: str = "default") -> List[Dict]:
-        """Extrae operaciones fraccionadas con métodos mejorados"""
+        """Usa el módulo especializado de operaciones fraccionadas"""
+        
+        # OPCIÓN 1: Usar módulo especializado (descomenta cuando tengas los 3 archivos)
+        # return extraer_operaciones_fraccionadas_avanzado(texto, pdf_id)
+        
+        # OPCIÓN 2: Método temporal mejorado (activo por defecto)
+        return self._extraer_fraccionadas_mejorado_temporal(texto, pdf_id)
+    
+    def _extraer_fraccionadas_mejorado_temporal(self, texto: str, pdf_id: str) -> List[Dict]:
+        """Método temporal mejorado hasta usar el módulo especializado"""
         operaciones = []
         
         if st.session_state.get('debug_mode', False):
-            st.write(f"🔍 **DEBUG DETALLADO para PDF: {pdf_id}**")
-            st.write(f"📄 Longitud del texto extraído: {len(texto)} caracteres")
+            st.write(f"⚠️ **MÉTODO TEMPORAL MEJORADO** para {pdf_id}")
+            st.write("🔄 Para máximo rendimiento, usa los módulos separados")
             
-            if len(texto) > 0:
-                st.text_area("🔍 Texto extraído (primeros 4000 caracteres)", 
-                            texto[:4000], height=300, key=f"debug_texto_{pdf_id}")
-                
-                menciones_caixa = re.findall(r'.*CAJ\.LA CAIXA.*', texto, re.IGNORECASE)
-                st.write(f"🔍 Menciones de 'CAJ.LA CAIXA': {len(menciones_caixa)}")
-                for i, mencion in enumerate(menciones_caixa[:15]):
-                    st.write(f"   {i+1}. {mencion}")
-                
-                fechas = re.findall(r'\d{2}\.\d{2}\.\d{4}', texto)
-                st.write(f"🔍 Fechas encontradas: {len(fechas)} -> {fechas[:15]}")
-                
-                numeros = re.findall(r'\d+[,\.]\d{2}', texto)
-                st.write(f"🔍 Números decimales: {len(numeros)} -> {numeros[:20]}")
+            # Debug básico
+            menciones_caixa = re.findall(r'.*CAJ\.LA CAIXA.*', texto, re.IGNORECASE)
+            st.write(f"🔍 Menciones CAJ.LA CAIXA encontradas: {len(menciones_caixa)}")
+            for i, mencion in enumerate(menciones_caixa[:10]):
+                st.write(f"   {i+1}. {mencion}")
         
-        # MÉTODO 1: Buscar sección específica de operaciones fraccionadas
+        # MÉTODO 1: Buscar sección específica
         seccion_match = re.search(r'IMPORTE OPERACIONES FRACCIONADAS(.*?)(?=OPERACIONES DE LA TARJETA|$)', texto, re.DOTALL | re.IGNORECASE)
         
         if seccion_match:
             seccion_texto = seccion_match.group(1)
             if st.session_state.get('debug_mode', False):
-                st.write(f"📋 Sección fraccionadas encontrada: {len(seccion_texto)} caracteres")
-                st.text_area("Sección completa", seccion_texto, height=300, key=f"seccion_{pdf_id}")
+                st.write(f"📋 Sección fraccionadas: {len(seccion_texto)} caracteres")
+                st.text_area("Sección", seccion_texto[:2000], height=200, key=f"seccion_temp_{pdf_id}")
             
-            # Patrón para formato tabla CaixaBank: FECHA CAJ.LA CAIXA OF.XXXX IMPORTE1 IMPORTE2 CAPITAL INTERESES CUOTA
+            # Patrón mejorado para tabla
             patron_tabla = r'(\d{2}\.\d{2}\.\d{4})\s+CAJ\.LA\s*CAIXA\s+(?:OF\.\d{4})?\s*(\d+[,\.]\d{2})\s+(\d+[,\.]\d{2})\s+(\d+[,\.]\d{2})\s+(\d+[,\.]\d{2})\s+(\d+[,\.]\d{2})'
-            
             matches = re.finditer(patron_tabla, seccion_texto, re.IGNORECASE)
             
             for match in matches:
                 try:
-                    fecha = match.group(1)
-                    importe_operacion = float(match.group(2).replace(',', '.'))
-                    importe_pendiente = float(match.group(3).replace(',', '.'))
-                    capital_amortizado = float(match.group(4).replace(',', '.'))
-                    intereses = float(match.group(5).replace(',', '.'))
-                    cuota_mensual = float(match.group(6).replace(',', '.'))
-                    
-                    # Buscar plazo en contexto
-                    plazo = ""
-                    importe_pendiente_despues = 0.0
-                    
-                    inicio_contexto = max(0, match.start() - 50)
-                    fin_contexto = min(len(seccion_texto), match.end() + 200)
-                    contexto = seccion_texto[inicio_contexto:fin_contexto]
-                    
-                    plazo_match = re.search(r'Plazo\s+(\d+\s*De\s*\d+)', contexto, re.IGNORECASE)
-                    if not plazo_match:
-                        plazo_match = re.search(r'PRÓXIMO\s*PLAZO\s*(\d{2}-\d{2}-\d{4})', contexto, re.IGNORECASE)
-                    if plazo_match:
-                        plazo = plazo_match.group(1)
-                    
-                    pendiente_match = re.search(r'Importe\s+pendiente\s+después.*?(\d+[,\.]\d{2})', contexto, re.IGNORECASE)
-                    if pendiente_match:
-                        try:
-                            importe_pendiente_despues = float(pendiente_match.group(1).replace(',', '.'))
-                        except ValueError:
-                            pass
-                    
                     operacion = {
-                        'fecha': fecha,
+                        'fecha': match.group(1),
                         'concepto': 'CAJ.LA CAIXA',
-                        'importe_operacion': importe_operacion,
-                        'importe_pendiente': importe_pendiente,
-                        'capital_amortizado': capital_amortizado,
-                        'intereses': intereses,
-                        'cuota_mensual': cuota_mensual,
-                        'plazo': plazo,
-                        'importe_pendiente_despues': importe_pendiente_despues
+                        'importe_operacion': float(match.group(2).replace(',', '.')),
+                        'importe_pendiente': float(match.group(3).replace(',', '.')),
+                        'capital_amortizado': float(match.group(4).replace(',', '.')),
+                        'intereses': float(match.group(5).replace(',', '.')),
+                        'cuota_mensual': float(match.group(6).replace(',', '.')),
+                        'plazo': '',
+                        'importe_pendiente_despues': 0.0,
+                        'metodo_extraccion': 'temporal_tabla'
                     }
                     operaciones.append(operacion)
                     
                     if st.session_state.get('debug_mode', False):
-                        st.write(f"✅ Método tabla: {fecha} - {importe_operacion}€ - Plazo: {plazo}")
+                        st.write(f"✅ Tabla: {operacion['fecha']} - {operacion['importe_operacion']}€")
                 
                 except Exception as e:
                     if st.session_state.get('debug_mode', False):
-                        st.write(f"❌ Error método tabla: {str(e)}")
+                        st.write(f"❌ Error tabla: {str(e)}")
                     continue
         
-        # MÉTODO 2: Buscar línea por línea si no encontramos suficientes
+        # MÉTODO 2: Búsqueda línea por línea si no encontramos suficientes
         if len(operaciones) < 5:
             if st.session_state.get('debug_mode', False):
-                st.write(f"🔄 Método tabla: {len(operaciones)} operaciones. Probando línea por línea...")
+                st.write(f"🔄 Solo {len(operaciones)} con tabla, probando línea por línea...")
             
             lineas = texto.split('\n')
             for i, linea in enumerate(lineas):
-                linea = linea.strip()
-                
-                if re.match(r'^\d{2}\.\d{2}\.\d{4}', linea) and 'CAJ.LA CAIXA' in linea.upper():
-                    if st.session_state.get('debug_mode', False):
-                        st.write(f"🔍 Línea candidata {i+1}: {linea}")
-                    
+                if re.search(r'\d{2}\.\d{2}\.\d{4}.*CAJ\.LA\s*CAIXA', linea, re.IGNORECASE):
                     try:
-                        partes = linea.split()
-                        fecha = partes[0]
+                        fecha_match = re.search(r'(\d{2}\.\d{2}\.\d{4})', linea)
                         numeros = re.findall(r'\d+[,\.]\d{2}', linea)
                         
-                        if st.session_state.get('debug_mode', False):
-                            st.write(f"   📅 Fecha: {fecha}, 💰 Números: {numeros}")
-                        
-                        if len(numeros) >= 1:
+                        if fecha_match and len(numeros) >= 1:
+                            fecha = fecha_match.group(1)
                             numeros_float = [float(n.replace(',', '.')) for n in numeros]
                             
-                            plazo = ""
-                            importe_pendiente_despues = 0.0
-                            
-                            for j in range(i+1, min(i+6, len(lineas))):
-                                linea_siguiente = lineas[j].strip()
-                                
-                                plazo_match = re.search(r'Plazo\s+(\d+\s*De\s*\d+)', linea_siguiente, re.IGNORECASE)
-                                if not plazo_match:
-                                    plazo_match = re.search(r'PRÓXIMO\s*PLAZO\s*(\d{2}-\d{2}-\d{4})', linea_siguiente, re.IGNORECASE)
-                                if plazo_match:
-                                    plazo = plazo_match.group(1)
-                                
-                                if "pendiente después" in linea_siguiente.lower():
-                                    pendiente_match = re.search(r'(\d+[,\.]\d{2})', linea_siguiente)
-                                    if pendiente_match:
-                                        try:
-                                            importe_pendiente_despues = float(pendiente_match.group(1).replace(',', '.'))
-                                        except ValueError:
-                                            pass
-                            
-                            operacion = {
-                                'fecha': fecha,
-                                'concepto': 'CAJ.LA CAIXA',
-                                'importe_operacion': numeros_float[0],
-                                'importe_pendiente': numeros_float[1] if len(numeros_float) > 1 else numeros_float[0],
-                                'capital_amortizado': numeros_float[2] if len(numeros_float) > 2 else 0.0,
-                                'intereses': numeros_float[3] if len(numeros_float) > 3 else 0.0,
-                                'cuota_mensual': numeros_float[4] if len(numeros_float) > 4 else 0.0,
-                                'plazo': plazo,
-                                'importe_pendiente_despues': importe_pendiente_despues
-                            }
-                            
+                            # Evitar duplicados
                             es_duplicado = any(
                                 op['fecha'] == fecha and abs(op['importe_operacion'] - numeros_float[0]) < 0.01
                                 for op in operaciones
                             )
                             
                             if not es_duplicado:
+                                operacion = {
+                                    'fecha': fecha,
+                                    'concepto': 'CAJ.LA CAIXA',
+                                    'importe_operacion': numeros_float[0],
+                                    'importe_pendiente': numeros_float[1] if len(numeros_float) > 1 else numeros_float[0],
+                                    'capital_amortizado': numeros_float[2] if len(numeros_float) > 2 else 0.0,
+                                    'intereses': numeros_float[3] if len(numeros_float) > 3 else 0.0,
+                                    'cuota_mensual': numeros_float[4] if len(numeros_float) > 4 else 0.0,
+                                    'plazo': '',
+                                    'importe_pendiente_despues': 0.0,
+                                    'metodo_extraccion': 'temporal_linea'
+                                }
                                 operaciones.append(operacion)
+                                
                                 if st.session_state.get('debug_mode', False):
-                                    st.write(f"✅ Método línea: {fecha} - {numeros_float[0]}€")
+                                    st.write(f"✅ Línea: {fecha} - {numeros_float[0]}€")
                     
                     except Exception as e:
                         if st.session_state.get('debug_mode', False):
-                            st.write(f"❌ Error línea {i+1}: {str(e)}")
+                            st.write(f"❌ Error línea: {str(e)}")
                         continue
         
-        # MÉTODO 3: Patrón simple de respaldo
+        # MÉTODO 3: Respaldo global
         if len(operaciones) == 0:
             if st.session_state.get('debug_mode', False):
-                st.write("🔄 Probando método de respaldo...")
+                st.write("🆘 Usando método de respaldo...")
             
             patron_simple = r'(\d{2}\.\d{2}\.\d{4}).*?CAJ\.LA\s*CAIXA.*?(\d+[,\.]\d{2})'
             matches = re.finditer(patron_simple, texto, re.IGNORECASE | re.DOTALL)
@@ -245,8 +196,7 @@ class ExtractorExtractoBancario:
             for match in matches:
                 try:
                     fecha = match.group(1)
-                    importe_str = match.group(2)
-                    importe = float(importe_str.replace(',', '.'))
+                    importe = float(match.group(2).replace(',', '.'))
                     
                     operacion = {
                         'fecha': fecha,
@@ -257,18 +207,13 @@ class ExtractorExtractoBancario:
                         'intereses': 0.0,
                         'cuota_mensual': 0.0,
                         'plazo': '',
-                        'importe_pendiente_despues': 0.0
+                        'importe_pendiente_despues': 0.0,
+                        'metodo_extraccion': 'temporal_respaldo'
                     }
+                    operaciones.append(operacion)
                     
-                    es_duplicado = any(
-                        op['fecha'] == fecha and abs(op['importe_operacion'] - importe) < 0.01
-                        for op in operaciones
-                    )
-                    
-                    if not es_duplicado:
-                        operaciones.append(operacion)
-                        if st.session_state.get('debug_mode', False):
-                            st.write(f"✅ Método respaldo: {fecha} - {importe}€")
+                    if st.session_state.get('debug_mode', False):
+                        st.write(f"🆘 Respaldo: {fecha} - {importe}€")
                 
                 except Exception as e:
                     if st.session_state.get('debug_mode', False):
@@ -276,14 +221,9 @@ class ExtractorExtractoBancario:
                     continue
         
         if st.session_state.get('debug_mode', False):
-            st.write(f"🔢 **RESUMEN FINAL:**")
-            st.write(f"   Total operaciones fraccionadas: {len(operaciones)}")
-            if operaciones:
-                st.write("📋 **Todas las operaciones:**")
-                for i, op in enumerate(operaciones):
-                    st.write(f"   {i+1}. {op['fecha']} - {op['concepto']} - {op['importe_operacion']}€ - Plazo: {op['plazo']}")
-            else:
-                st.error("❌ **NO SE ENCONTRARON OPERACIONES FRACCIONADAS**")
+            st.write(f"🔢 **TOTAL TEMPORAL: {len(operaciones)} operaciones**")
+            if len(operaciones) < 5:
+                st.warning("⚠️ Pocas operaciones encontradas. Considera usar el módulo especializado.")
         
         return operaciones
     
@@ -323,6 +263,7 @@ class ExtractorExtractoBancario:
                 except ValueError:
                     continue
         
+        # Método alternativo si no encuentra suficientes
         if len(operaciones) < 5:
             if st.session_state.get('debug_mode', False):
                 st.write(f"🔄 Solo {len(operaciones)} operaciones período, probando método alternativo...")
@@ -396,8 +337,7 @@ class ExtractorExtractoBancario:
         return info_general, operaciones_fraccionadas, operaciones_periodo
 
 def crear_excel(info_general: Dict, operaciones_fraccionadas: List[Dict], operaciones_periodo: List[Dict]) -> bytes:
-    """Crea un archivo Excel con los datos extraídos"""
-    
+    """TEMPORAL - Se moverá a utils.py"""
     buffer = io.BytesIO()
     
     with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
@@ -442,7 +382,7 @@ def crear_excel(info_general: Dict, operaciones_fraccionadas: List[Dict], operac
     return buffer.getvalue()
 
 def reiniciar_aplicacion():
-    """Reinicia completamente la aplicación limpiando todo el estado"""
+    """TEMPORAL - Se moverá a utils.py"""
     keys_to_clear = [
         'resultados_procesamiento',
         'archivos_procesados', 
@@ -457,7 +397,7 @@ def reiniciar_aplicacion():
     st.rerun()
 
 def main():
-    st.title("📊 Convertidor de Extractos Bancarios PDF a Excel v2.5")
+    st.title("📊 Convertidor de Extractos Bancarios PDF a Excel v2.6 - MODULAR")
     st.markdown("---")
     
     # Inicializar session_state
@@ -473,22 +413,25 @@ def main():
         st.session_state['debug_mode'] = False
     st.session_state['debug_mode'] = debug_mode
     
-    with st.expander("ℹ️ Información de la aplicación"):
+    with st.expander("ℹ️ Información de la aplicación v2.6"):
         st.markdown("""
-        Esta aplicación permite convertir extractos bancarios en formato PDF a archivos Excel organizados.
+        **VERSIÓN MODULAR** - Aplicación dividida en módulos especializados
         
-        **Características:**
-        - Extrae información general (titular, período, límite de crédito)
-        - Procesa operaciones fraccionadas (BBVA, CaixaBank, etc.)
-        - Procesa operaciones del período
-        - Genera un archivo Excel con múltiples hojas
+        **Módulos:**
+        - 📄 `main.py` - Interfaz principal (este archivo)
+        - 🔧 `operaciones_fraccionadas.py` - Extracción especializada (EN DESARROLLO)
+        - 🛠️ `utils.py` - Utilidades, Excel, debug (EN DESARROLLO)
         
-        **Formatos soportados:**
-        - Extractos bancarios MyCard de CaixaBank
-        - Extractos de BBVA
-        - PDFs con estructura similar
+        **Estado actual:**
+        - ✅ Interfaz principal funcionando
+        - 🔄 Usando métodos temporales hasta completar módulos
+        - 🎯 Enfoque en solucionar problemas de operaciones fraccionadas
         
-        **Versión 2.5** - Debug ultra-detallado, descarga mejorada, limpiar funcional
+        **Ventajas de la división:**
+        - 🎯 Solución específica de problemas
+        - 🔧 Actualizaciones quirúrgicas
+        - 🐛 Debug más preciso
+        - 📈 Mejor mantenimiento
         """)
     
     # Botón de limpiar todo en la parte superior
@@ -621,7 +564,11 @@ def main():
                                 st.write(f"**Período:** {resultado['info_general']['periodo_inicio']} - {resultado['info_general']['periodo_fin']}")
                         
                         with col3:
-                            st.metric("Fraccionadas", len(resultado['operaciones_fraccionadas']))
+                            fraccionadas_count = len(resultado['operaciones_fraccionadas'])
+                            if fraccionadas_count < 5:  # Indicar si parece bajo
+                                st.metric("⚠️ Fraccionadas", fraccionadas_count)
+                            else:
+                                st.metric("✅ Fraccionadas", fraccionadas_count)
                         
                         with col4:
                             st.metric("Del Período", len(resultado['operaciones_periodo']))
@@ -678,7 +625,7 @@ def main():
     st.markdown(
         """
         <div style='text-align: center; color: #666; font-size: 0.8em;'>
-        Convertidor de Extractos Bancarios v2.5 | Debug ultra-detallado | Descarga mejorada | Limpiar funcional | Desarrollado con Streamlit por ROF
+        Convertidor de Extractos Bancarios v2.6 MODULAR | En desarrollo: módulo operaciones_fraccionadas.py | ROF
         </div>
         """, 
         unsafe_allow_html=True
