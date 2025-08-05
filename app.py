@@ -70,6 +70,11 @@ class ExtractorExtractoBancario:
         if st.session_state.get('debug_mode', False):
             st.write(f"🔍 **Debug para PDF: {pdf_id}**")
             st.write(f"📄 Longitud del texto extraído: {len(texto)} caracteres")
+            # TEMPORAL: Mostrar texto sin condiciones
+            st.write("**TEXTO EXTRAÍDO (primeros 2000 caracteres):**")
+            st.text(texto[:2000])
+            st.write("**TEXTO EXTRAÍDO (caracteres 2000-4000):**") 
+            st.text(texto[2000:4000])
             
             if len(texto) > 0:
                 st.text_area("🔍 Fragmento del texto extraído (primeros 2000 caracteres)", 
