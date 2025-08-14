@@ -6,6 +6,7 @@ from datetime import datetime
 import io
 import base64
 from typing import Dict, List, Tuple, Optional
+import unicodedata
 
 # Configuración de la página
 st.set_page_config(
@@ -20,9 +21,61 @@ class ExtractorExtractoBancario:
             'fecha': r'\d{2}\.\d{2}\.\d{4}',
             'importe': r'\d+[,\.]\d{2}',
             'operacion_fraccionada': r'(CAJ\.LA CAIXA|CAJERO|B\.B\.V\.A|FRACCIONADO)',
-            'establecimiento': r'^[A-Z][A-Z\s\.\-&0-9]*$'
+            # Evitar rango inválido en clase de caracteres: el guion debe estar al final o escapado
+            'establecimiento': r'^[A-Z][A-Z\s.&0-9\-]*$'
         }
-    
+
+    # Patrón monetario robusto: signo opcional al inicio/fin, miles con punto o espacio, decimales con coma o punto
+    PATRON_MONETARIO = r'(?:-)?(?:\d{1,3}(?:[\.\s]\d{3})*(?:[\.,]\d{2})|\d+[\.,]\d{2})(?:-)?'
+
+    def normalizar_texto(self, texto: str) -> str:
+        """Normaliza texto extraído del PDF para mejorar el parseo."""
+        if not texto:
+            return ""
+        texto_norm = unicodedata.normalize('NFKC', texto)
+        texto_norm = texto_norm.replace('\r\n', '\n').replace('\r', '\n')
+        texto_norm = texto_norm.replace('\xa0', ' ').replace('\u00A0', ' ')
+        texto_norm = texto_norm.replace('–', '-').replace('—', '-')
+        # Estándar dd.mm.yyyy
+        texto_norm = re.sub(r'(\d{2})[/-](\d{2})[/-](\d{4})', r'\1.\2.\3', texto_norm)
+        # Forzar salto de línea antes de fechas pegadas
+        texto_norm = re.sub(r'(?<!\n)(\d{2}[\./-]\d{2}[\./-]\d{4})', r'\n\1', texto_norm)
+        # Normalizar PROXIMO -> PRÓXIMO
+        texto_norm = re.sub(r'PROXIMO', 'PRÓXIMO', texto_norm, flags=re.IGNORECASE)
+        # Compactar espacios por línea y eliminar vacías
+        lineas = [re.sub(r'[ \t\f\v]+', ' ', linea).strip() for linea in texto_norm.split('\n')]
+        lineas = [l for l in lineas if l]
+        return '\n'.join(lineas)
+
+    def parsear_importe(self, valor: str) -> float:
+        """Convierte una cadena monetaria a float manejando miles y distintos separadores."""
+        if not valor:
+            return 0.0
+        s = valor.strip().replace('€', '').replace(' ', '')
+        # Paréntesis como negativo
+        if s.startswith('(') and s.endswith(')'):
+            s = '-' + s[1:-1]
+        # Signo negativo al final
+        if s.endswith('-') and not s.startswith('-'):
+            s = '-' + s[:-1]
+        if ',' in s and '.' in s:
+            s = s.replace('.', '')
+        s = s.replace(',', '.')
+        try:
+            return float(s)
+        except ValueError:
+            return 0.0
+
+    def normalizar_plazo(self, valor: str) -> str:
+        """Normaliza el texto del plazo para formato consistente."""
+        if not valor:
+            return ""
+        # Asegurar espacios alrededor de 'De'
+        valor = re.sub(r"(\d)\s*De\s*(\d)", r"\1 De \2", valor, flags=re.IGNORECASE)
+        # Unificar separadores de fecha a dd.mm.yyyy
+        valor = re.sub(r"(\d{2})[\./-](\d{2})[\./-](\d{4})", r"\1.\2.\3", valor)
+        return valor.strip()
+
     def extraer_texto_pdf(self, archivo_pdf) -> str:
         """Extrae texto del PDF usando pdfplumber"""
         texto_completo = ""
@@ -54,11 +107,11 @@ class ExtractorExtractoBancario:
             info['periodo_inicio'] = match_periodo.group(1)
             info['periodo_fin'] = match_periodo.group(2)
         
-        # Buscar límite de crédito
-        patron_limite = r'LÍMITE.*?(\d+[,\.]\d{2})'
+        # Buscar límite de crédito (con/sin tilde, con miles)
+        patron_limite = rf'L[ÍI]MITE.*?({self.PATRON_MONETARIO})'
         match_limite = re.search(patron_limite, texto, re.IGNORECASE)
         if match_limite:
-            info['limite_credito'] = match_limite.group(1).replace(',', '.')
+            info['limite_credito'] = str(self.parsear_importe(match_limite.group(1)))
         
         return info
     
@@ -85,55 +138,64 @@ class ExtractorExtractoBancario:
                 st.error("❌ Texto extraído está vacío - problema en la lectura del PDF")
                 return operaciones
         
-        # Método 1: Buscar operaciones en formato de líneas individuales (BBVA)
+        # Método 1: Buscar operaciones en formato de líneas individuales (BBVA/CAIXA)
         lineas = texto.split('\n')
         i = 0
         while i < len(lineas):
             linea = lineas[i].strip()
             
-            if re.search(r'^\d{2}\.\d{2}\.\d{4}.*(B\.B\.V\.A\.|CAJ\.LA CAIXA)', linea):
+            if re.search(r'^\d{2}\.\d{2}\.\d{4}.*(B\.?B\.?V\.?A\.?|CAJ\.LA\s*CAIXA)', linea, re.IGNORECASE):
                 try:
                     partes = linea.split()
                     fecha = partes[0]
                     
-                    patron_numero_completo = r'^\d+[,\.]\d{2}$'
+                    patron_numero_completo = rf'^(?:{self.PATRON_MONETARIO})$'
                     numeros = []
                     concepto_partes = []
                     
                     for parte in partes[1:]:
                         if re.match(patron_numero_completo, parte):
                             try:
-                                numeros.append(float(parte.replace(',', '.')))
+                                numeros.append(self.parsear_importe(parte))
                             except ValueError:
                                 continue
-                        elif parte not in ['B.B.V.A.', 'CAJ.LA', 'CAIXA', 'OF.7102', 'OF.7104']:
+                        elif parte.upper() not in ['B.B.V.A.', 'BBVA', 'CAJ.LA', 'CAIXA', 'OF.7102', 'OF.7104']:
                             concepto_partes.append(parte)
                     
                     concepto = ' '.join(concepto_partes).strip()
-                    if 'B.B.V.A.' in linea:
+                    if re.search(r'B\.?B\.?V\.?A\.?', linea, re.IGNORECASE):
                         concepto = 'B.B.V.A.' if not concepto else concepto
-                    elif 'CAJ.LA CAIXA' in linea:
+                    elif re.search(r'CAJ\.LA\s*CAIXA', linea, re.IGNORECASE):
                         concepto = 'CAJ.LA CAIXA' if not concepto else concepto
                     
                     plazo = ""
                     importe_pendiente_despues = 0.0
-                    
-                    for j in range(i+1, min(i+6, len(lineas))):
+
+                    # Buscar plazo en la misma línea y en una ventana multi-línea alrededor (i-3 .. i+11)
+                    patron_plazo = r'(?:Plazo\s*[:\-]?\s*(\d+\s*De\s*\d+)|PRÓXIMO\s*PLAZO\s*[:\-]?\s*(\d{2}[\./-]\d{2}[\./-]\d{4}))'
+                    ventana_lineas = " ".join([l.strip() for l in lineas[max(0, i-3):min(i+12, len(lineas))]])
+                    plazo_win = re.search(patron_plazo, ventana_lineas, re.IGNORECASE)
+                    if plazo_win:
+                        plazo = plazo_win.group(1) if plazo_win.group(1) else plazo_win.group(2)
+                        plazo = self.normalizar_plazo(plazo)
+
+                    for j in range(i+1, min(i+12, len(lineas))):
                         if j >= len(lineas):
                             break
                         linea_siguiente = lineas[j].strip()
                         
-                        plazo_match = re.search(r'Plazo\s+(\d+\s*De\s*\d+)', linea_siguiente, re.IGNORECASE)
-                        if not plazo_match:
-                            plazo_match = re.search(r'PRÓXIMO\s*PLAZO\s*(\d{2}-\d{2}-\d{4})', linea_siguiente, re.IGNORECASE)
-                        if plazo_match:
-                            plazo = plazo_match.group(1)
+                        if not plazo:
+                            plazo_match = re.search(patron_plazo, linea_siguiente, re.IGNORECASE)
+                            if plazo_match:
+                                plazo = plazo_match.group(1) if plazo_match.group(1) else plazo_match.group(2)
+                                plazo = self.normalizar_plazo(plazo)
                         
                         if "Importe pendiente después" in linea_siguiente or "Importependientedespués" in linea_siguiente:
-                            pendiente_match = re.search(r'(\d+[,\.]\d{2})', linea_siguiente)
+                            pendiente_match = re.search(self.PATRON_MONETARIO, linea_siguiente)
                             if pendiente_match:
                                 try:
-                                    importe_pendiente_despues = float(pendiente_match.group(1).replace(',', '.'))
+                                    # PATRON_MONETARIO no tiene grupo de captura; usar group(0)
+                                    importe_pendiente_despues = self.parsear_importe(pendiente_match.group(0))
                                 except ValueError:
                                     pass
                     
@@ -165,8 +227,8 @@ class ExtractorExtractoBancario:
             if st.session_state.get('debug_mode', False):
                 st.write("🔄 Método 1 no encontró operaciones, probando método 2 (texto continuo)...")
             
-            # Patrón mejorado para operaciones fraccionadas en texto continuo
-            patron_texto_continuo = r'(\d{2}\.\d{2}\.\d{4})\s*(CAJ\.LA\s*CAIXA|COMERCIAL\s*MAYORARTE)\s*(?:OF\.\d{4})?\s*(?:INNOV)?\s*(\d+[,\.]\d{2})\s*(\d+[,\.]\d{2})\s*(\d+[,\.]\d{2})\s*(\d+[,\.]\d{2})\s*(\d+[,\.]\d{2})'
+            # Patrón mejorado para operaciones fraccionadas en texto continuo con importes robustos
+            patron_texto_continuo = rf'(\d{{2}}\.\d{{2}}\.\d{{4}})\s*(CAJ\.LA\s*CAIXA|COMERCIAL\s*MAYORARTE)\s*(?:OF\.\d{{4}})?\s*(?:INNOV)?\s*({self.PATRON_MONETARIO})\s*({self.PATRON_MONETARIO})\s*({self.PATRON_MONETARIO})\s*({self.PATRON_MONETARIO})\s*({self.PATRON_MONETARIO})'
             
             matches = re.finditer(patron_texto_continuo, texto, re.IGNORECASE | re.DOTALL)
             
@@ -176,25 +238,28 @@ class ExtractorExtractoBancario:
                 try:
                     fecha = match.group(1)
                     concepto = match.group(2).replace(' ', ' ').strip()
-                    importe_operacion = float(match.group(3).replace(',', '.'))
-                    importe_pendiente = float(match.group(4).replace(',', '.'))
-                    capital_amortizado = float(match.group(5).replace(',', '.'))
-                    intereses = float(match.group(6).replace(',', '.'))
-                    cuota_mensual = float(match.group(7).replace(',', '.'))
+                    importe_operacion = self.parsear_importe(match.group(3))
+                    importe_pendiente = self.parsear_importe(match.group(4))
+                    capital_amortizado = self.parsear_importe(match.group(5))
+                    intereses = self.parsear_importe(match.group(6))
+                    cuota_mensual = self.parsear_importe(match.group(7))
                     
                     # Buscar plazo en el texto cercano
                     plazo = ""
                     texto_alrededor = texto[match.start()-100:match.end()+300]
-                    plazo_match = re.search(r'(?:Plazo\s*(\d+\s*De\s*\d+)|PRÓXIMO\s*PLAZO\s*(\d{2}-\d{2}-\d{4}))', texto_alrededor, re.IGNORECASE)
+                    plazo_match = re.search(r'(?:Plazo\s*[:\-]?\s*(\d+\s*De\s*\d+)|PRÓXIMO\s*PLAZO\s*[:\-]?\s*(\d{2}[\./-]\d{2}[\./-]\d{4}))', texto_alrededor, re.IGNORECASE)
                     if plazo_match:
                         plazo = plazo_match.group(1) if plazo_match.group(1) else plazo_match.group(2)
+                        plazo = self.normalizar_plazo(plazo)
                     
                     # Buscar importe pendiente después
                     importe_pendiente_despues = 0.0
-                    pendiente_match = re.search(r'Importe.*?pendiente.*?después.*?(\d+[,\.]\d{2})', texto_alrededor, re.IGNORECASE)
+                    pendiente_match = re.search(rf'Importe.*?pendiente.*?después.*?({self.PATRON_MONETARIO})', texto_alrededor, re.IGNORECASE)
                     if pendiente_match:
                         try:
-                            importe_pendiente_despues = float(pendiente_match.group(1).replace(',', '.'))
+                            # Si el patrón no define grupo de captura, usar group(0)
+                            valor = pendiente_match.group(1) if pendiente_match.lastindex else pendiente_match.group(0)
+                            importe_pendiente_despues = self.parsear_importe(valor)
                         except ValueError:
                             pass
                     
@@ -238,7 +303,7 @@ class ExtractorExtractoBancario:
                         st.write(f"🔍 Línea encontrada: {linea[:100]}...")
                     
                     # Intentar extraer números de esta línea
-                    numeros = re.findall(r'\d+[,\.]\d{2}', linea)
+                    numeros = re.findall(self.PATRON_MONETARIO, linea)
                     if len(numeros) >= 5:
                         try:
                             fecha_match = re.search(r'(\d{2}\.\d{2}\.\d{4})', linea)
@@ -248,11 +313,11 @@ class ExtractorExtractoBancario:
                                 operacion = {
                                     'fecha': fecha,
                                     'concepto': 'CAJ.LA CAIXA',
-                                    'importe_operacion': float(numeros[0].replace(',', '.')),
-                                    'importe_pendiente': float(numeros[1].replace(',', '.')),
-                                    'capital_amortizado': float(numeros[2].replace(',', '.')),
-                                    'intereses': float(numeros[3].replace(',', '.')),
-                                    'cuota_mensual': float(numeros[4].replace(',', '.')),
+                                    'importe_operacion': self.parsear_importe(numeros[0]),
+                                    'importe_pendiente': self.parsear_importe(numeros[1]),
+                                    'capital_amortizado': self.parsear_importe(numeros[2]),
+                                    'intereses': self.parsear_importe(numeros[3]),
+                                    'cuota_mensual': self.parsear_importe(numeros[4]),
                                     'plazo': '',
                                     'importe_pendiente_despues': 0.0
                                 }
@@ -265,15 +330,60 @@ class ExtractorExtractoBancario:
                             if st.session_state.get('debug_mode', False):
                                 st.write(f"❌ Error procesando línea método 3: {str(e)}")
                             continue
+
+        # Método 4: Por sección 'IMPORTE OPERACIONES FRACCIONADAS'
+        if len(operaciones) == 0:
+            if st.session_state.get('debug_mode', False):
+                st.write("🔄 Probando método 4 (sección IMPORTE OPERACIONES FRACCIONADAS)...")
+            try:
+                seccion_match = re.search(r'IMPORTE\s+OPERACIONES\s+FRACCIONADAS[\s\S]*?(?=OPERACIONES\s+DE\s+LA\s+TARJETA|Página|\Z)', texto, re.IGNORECASE)
+                if seccion_match:
+                    seccion = seccion_match.group(0)
+                    for linea in seccion.split('\n'):
+                        l = linea.strip()
+                        if not l:
+                            continue
+                        # Fecha al inicio y varios importes en la línea
+                        if re.match(r'^\d{2}\.\d{2}\.\d{4}', l):
+                            numeros = re.findall(self.PATRON_MONETARIO, l)
+                            if len(numeros) >= 5:
+                                try:
+                                    fecha = re.search(r'(\d{2}\.\d{2}\.\d{4})', l).group(1)
+                                    operacion = {
+                                        'fecha': fecha,
+                                        'concepto': 'FRACCIONADA',
+                                        'importe_operacion': self.parsear_importe(numeros[0]),
+                                        'importe_pendiente': self.parsear_importe(numeros[1]),
+                                        'capital_amortizado': self.parsear_importe(numeros[2]),
+                                        'intereses': self.parsear_importe(numeros[3]),
+                                        'cuota_mensual': self.parsear_importe(numeros[4]),
+                                        'plazo': '',
+                                        'importe_pendiente_despues': 0.0
+                                    }
+                                    operaciones.append(operacion)
+                                except Exception:
+                                    continue
+            except Exception as e:
+                if st.session_state.get('debug_mode', False):
+                    st.write(f"❌ Error en método 4: {e}")
         
+        # Deduplicar operaciones fraccionadas por (fecha, concepto, importe_operacion, importe_pendiente)
+        unicas = []
+        vistos = set()
+        for op in operaciones:
+            clave = (op.get('fecha'), op.get('concepto','').strip().upper(), round(op.get('importe_operacion',0.0), 2), round(op.get('importe_pendiente',0.0), 2))
+            if clave not in vistos:
+                vistos.add(clave)
+                unicas.append(op)
+
         if st.session_state.get('debug_mode', False):
-            st.write(f"🔢 Total operaciones fraccionadas encontradas: {len(operaciones)}")
-            if operaciones:
+            st.write(f"🔢 Total operaciones fraccionadas encontradas: {len(unicas)}")
+            if unicas:
                 st.write("📋 Primeras operaciones:")
-                for i, op in enumerate(operaciones[:2]):
+                for i, op in enumerate(unicas[:3]):
                     st.json(op)
         
-        return operaciones
+        return unicas
     
     def extraer_operaciones_periodo(self, texto: str) -> List[Dict]:
         """Extrae operaciones del período del texto"""
@@ -284,9 +394,10 @@ class ExtractorExtractoBancario:
         for linea in lineas:
             linea = linea.strip()
             
-            patron_operacion = r'^(\d{2}\.\d{2}\.\d{4})\s+([A-Z][A-Z\s\.\-&0-9,\(\)\']*?)\s+([A-Z][A-Z\s\-\']*?)\s+(\d+[,\.]\d{2})(?:\s|$)'
+            # Soporte de formato variable: fecha + establecimiento + localidad + importe
+            patron_operacion = rf'^(\d{{2}}\.\d{{2}}\.\d{{4}})\s+([A-ZÁÉÍÓÚÜÑ\-/&\.\,\'\(\)0-9 ]+?)\s+([A-ZÁÉÍÓÚÜÑ\-/&\.\' ]+?)\s+({self.PATRON_MONETARIO})(?:\s|$)'
             
-            match = re.match(patron_operacion, linea)
+            match = re.match(patron_operacion, linea, re.IGNORECASE)
             if match:
                 fecha = match.group(1)
                 establecimiento = match.group(2).strip()
@@ -294,7 +405,7 @@ class ExtractorExtractoBancario:
                 importe_str = match.group(4)
                 
                 try:
-                    importe = float(importe_str.replace(',', '.'))
+                    importe = self.parsear_importe(importe_str)
                     
                     if len(establecimiento) > 3 and len(localidad) > 2:
                         operacion = {
@@ -330,18 +441,21 @@ class ExtractorExtractoBancario:
                         if len(partes) >= 4:
                             try:
                                 fecha = partes[0]
-                                patron_numerico = r'^\d+[,\.]\d{2}$'
+                                patron_numerico = rf'^(?:{self.PATRON_MONETARIO})$'
                                 importe_candidatos = [p for p in partes if re.match(patron_numerico, p)]
                                 
                                 if importe_candidatos:
-                                    importe = float(importe_candidatos[-1].replace(',', '.'))
+                                    importe = self.parsear_importe(importe_candidatos[-1])
                                     
                                     partes_sin_fecha_importe = partes[1:-1] if importe_candidatos else partes[1:]
                                     
                                     if len(partes_sin_fecha_importe) >= 2:
-                                        punto_corte = len(partes_sin_fecha_importe) // 2
-                                        establecimiento = ' '.join(partes_sin_fecha_importe[:punto_corte])
-                                        localidad = ' '.join(partes_sin_fecha_importe[punto_corte:])
+                                        # Heurística: última(s) palabra(s) en mayúsculas cortas pueden ser localidad
+                                        idx_corte = len(partes_sin_fecha_importe) - 1
+                                        establecimiento_tokens = partes_sin_fecha_importe[:idx_corte]
+                                        localidad_tokens = partes_sin_fecha_importe[idx_corte:]
+                                        establecimiento = ' '.join(establecimiento_tokens)
+                                        localidad = ' '.join(localidad_tokens)
                                         
                                         operacion_nueva = {
                                             'fecha': fecha,
@@ -378,6 +492,9 @@ class ExtractorExtractoBancario:
         # Crear un ID único para este PDF basado en su nombre
         pdf_id = archivo_pdf.name.replace('.pdf', '').replace('.PDF', '').replace(' ', '_').replace('-', '_')
         
+        # Normalización previa
+        texto = self.normalizar_texto(texto)
+        
         info_general = self.extraer_informacion_general(texto)
         operaciones_fraccionadas = self.extraer_operaciones_fraccionadas(texto, pdf_id)
         operaciones_periodo = self.extraer_operaciones_periodo(texto)
@@ -390,19 +507,15 @@ def crear_excel(info_general: Dict, operaciones_fraccionadas: List[Dict], operac
     buffer = io.BytesIO()
     
     with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
-        # Solo crear hojas de datos reales - SIN RESUMEN
-        if operaciones_fraccionadas:
-            df_fraccionadas = pd.DataFrame(operaciones_fraccionadas)
-            df_fraccionadas.to_excel(writer, sheet_name='Operaciones Fraccionadas', index=False)
+        # Siempre crear dos hojas con columnas estándar
+        cols_frac = ['fecha','concepto','importe_operacion','importe_pendiente','capital_amortizado','intereses','cuota_mensual','plazo','importe_pendiente_despues']
+        cols_periodo = ['fecha','establecimiento','localidad','importe']
+
+        df_fraccionadas = pd.DataFrame(operaciones_fraccionadas, columns=cols_frac)
+        df_fraccionadas.to_excel(writer, sheet_name='Operaciones Fraccionadas', index=False)
         
-        if operaciones_periodo:
-            df_periodo = pd.DataFrame(operaciones_periodo)
-            df_periodo.to_excel(writer, sheet_name='Operaciones Período', index=False)
-        
-        # Si no hay datos, crear hoja con mensaje
-        if not operaciones_fraccionadas and not operaciones_periodo:
-            df_vacio = pd.DataFrame([['No se encontraron operaciones']], columns=['Mensaje'])
-            df_vacio.to_excel(writer, sheet_name='Sin Datos', index=False)
+        df_periodo = pd.DataFrame(operaciones_periodo, columns=cols_periodo)
+        df_periodo.to_excel(writer, sheet_name='Operaciones Período', index=False)
     
     buffer.seek(0)
     return buffer.getvalue()
@@ -416,7 +529,7 @@ def reiniciar_aplicacion():
     st.rerun()
 
 def main():
-    st.title("📊 Convertidor de Extractos Bancarios PDF a Excel v2.4 - CÓDIGO ORIGINAL")
+    st.title("📊 Convertidor de Extractos Bancarios PDF a Excel v2.6.3 ")
     st.markdown("---")
     
     # Inicializar session_state para resultados

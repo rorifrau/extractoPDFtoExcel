@@ -1,0 +1,31 @@
+# Entornos virtuales
+.venv/
+venv/
+env/
+Include/
+Lib/
+Scripts/
+pyvenv.cfg
+
+# Archivos de sistema/IDE
+.DS_Store
+Thumbs.db
+.vscode/
+*.code-workspace
+
+# Archivos temporales
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.log
+.pytest_cache/
+.mypy_cache/
+
+# Datos/ejemplos pesados
+samples/
+*.pdf
+*.xlsx
+*.xls
+
+ 
