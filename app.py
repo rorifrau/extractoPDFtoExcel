@@ -170,10 +170,11 @@ class ExtractorExtractoBancario:
                     
                     plazo = ""
                     importe_pendiente_despues = 0.0
-
+                    
                     # Buscar plazo en la misma línea y en una ventana multi-línea alrededor (i-3 .. i+11)
                     patron_plazo = r'(?:Plazo\s*[:\-]?\s*(\d+\s*De\s*\d+)|PRÓXIMO\s*PLAZO\s*[:\-]?\s*(\d{2}[\./-]\d{2}[\./-]\d{4}))'
-                    ventana_lineas = " ".join([l.strip() for l in lineas[max(0, i-3):min(i+12, len(lineas))]])
+                    ventana_segmento = lineas[max(0, i-3):min(i+12, len(lineas))]
+                    ventana_lineas = " \n".join([l.strip() for l in ventana_segmento])
                     plazo_win = re.search(patron_plazo, ventana_lineas, re.IGNORECASE)
                     if plazo_win:
                         plazo = plazo_win.group(1) if plazo_win.group(1) else plazo_win.group(2)
@@ -209,7 +210,8 @@ class ExtractorExtractoBancario:
                             'intereses': numeros[3] if len(numeros) > 3 else 0.0,
                             'cuota_mensual': numeros[4] if len(numeros) > 4 else 0.0,
                             'plazo': plazo,
-                            'importe_pendiente_despues': importe_pendiente_despues
+                            'importe_pendiente_despues': importe_pendiente_despues,
+                            'debug_ctx': ventana_lineas if st.session_state.get('debug_mode', False) else ''
                         }
                         operaciones.append(operacion)
                         
@@ -319,7 +321,8 @@ class ExtractorExtractoBancario:
                                     'intereses': self.parsear_importe(numeros[3]),
                                     'cuota_mensual': self.parsear_importe(numeros[4]),
                                     'plazo': '',
-                                    'importe_pendiente_despues': 0.0
+                                    'importe_pendiente_despues': 0.0,
+                                    'debug_ctx': linea if st.session_state.get('debug_mode', False) else ''
                                 }
                                 operaciones.append(operacion)
                                 
@@ -330,58 +333,249 @@ class ExtractorExtractoBancario:
                             if st.session_state.get('debug_mode', False):
                                 st.write(f"❌ Error procesando línea método 3: {str(e)}")
                             continue
-
-        # Método 4: Por sección 'IMPORTE OPERACIONES FRACCIONADAS'
-        if len(operaciones) == 0:
-            if st.session_state.get('debug_mode', False):
-                st.write("🔄 Probando método 4 (sección IMPORTE OPERACIONES FRACCIONADAS)...")
-            try:
-                seccion_match = re.search(r'IMPORTE\s+OPERACIONES\s+FRACCIONADAS[\s\S]*?(?=OPERACIONES\s+DE\s+LA\s+TARJETA|Página|\Z)', texto, re.IGNORECASE)
-                if seccion_match:
-                    seccion = seccion_match.group(0)
-                    for linea in seccion.split('\n'):
-                        l = linea.strip()
-                        if not l:
-                            continue
-                        # Fecha al inicio y varios importes en la línea
-                        if re.match(r'^\d{2}\.\d{2}\.\d{4}', l):
-                            numeros = re.findall(self.PATRON_MONETARIO, l)
-                            if len(numeros) >= 5:
-                                try:
-                                    fecha = re.search(r'(\d{2}\.\d{2}\.\d{4})', l).group(1)
-                                    operacion = {
-                                        'fecha': fecha,
-                                        'concepto': 'FRACCIONADA',
-                                        'importe_operacion': self.parsear_importe(numeros[0]),
-                                        'importe_pendiente': self.parsear_importe(numeros[1]),
-                                        'capital_amortizado': self.parsear_importe(numeros[2]),
-                                        'intereses': self.parsear_importe(numeros[3]),
-                                        'cuota_mensual': self.parsear_importe(numeros[4]),
-                                        'plazo': '',
-                                        'importe_pendiente_despues': 0.0
-                                    }
-                                    operaciones.append(operacion)
-                                except Exception:
-                                    continue
-            except Exception as e:
-                if st.session_state.get('debug_mode', False):
-                    st.write(f"❌ Error en método 4: {e}")
         
-        # Deduplicar operaciones fraccionadas por (fecha, concepto, importe_operacion, importe_pendiente)
+        # Método 4: REEMPLAZADO - Extracción específica de sección IMPORTE OPERACIONES FRACCIONADAS
+        # Limpiar operaciones anteriores para usar SOLO esta sección
+        operaciones = []
+        
+        if st.session_state.get('debug_mode', False):
+            st.write("🔄 Método 4: Extracción por sección específica IMPORTE OPERACIONES FRACCIONADAS → TOTAL OPERACIONES FRACCIONADAS")
+            # Debug: Buscar las palabras clave por separado y mostrar contexto
+            texto_upper = texto.upper()
+            if 'IMPORTE' in texto_upper:
+                pos = texto_upper.find('IMPORTE')
+                contexto = texto[max(0, pos-50):pos+100]
+                st.write("✅ Palabra 'IMPORTE' encontrada")
+                st.text(f"Contexto: ...{contexto}...")
+            else:
+                st.write("❌ Palabra 'IMPORTE' NO encontrada")
+            
+            if 'FRACCIONADAS' in texto_upper:
+                pos = texto_upper.find('FRACCIONADAS')
+                contexto = texto[max(0, pos-50):pos+100]
+                st.write("✅ Palabra 'FRACCIONADAS' encontrada")
+                st.text(f"Contexto: ...{contexto}...")
+            else:
+                st.write("❌ Palabra 'FRACCIONADAS' NO encontrada")
+                
+            if 'TOTAL' in texto_upper:
+                pos = texto_upper.find('TOTAL')
+                contexto = texto[max(0, pos-50):pos+100]
+                st.write("✅ Palabra 'TOTAL' encontrada")
+                st.text(f"Contexto: ...{contexto}...")
+            else:
+                st.write("❌ Palabra 'TOTAL' NO encontrada")
+        
+        # Buscar la sección específica delimitada - Varios patrones
+        patron_seccion = r'IMPORTE\s+OPERACIONES\s+FRACCIONADAS.*?TOTAL\s+OPERACIONES\s+FRACCIONADAS'
+        match_seccion = re.search(patron_seccion, texto, re.DOTALL | re.IGNORECASE)
+        
+        if st.session_state.get('debug_mode', False):
+            if match_seccion:
+                st.write("✅ Patrón principal encontrado")
+            else:
+                st.write("❌ Patrón principal NO encontrado, probando alternativas...")
+                # Probar patrones alternativos
+                patrones_alt = [
+                    r'IMPORTE.*?OPERACIONES.*?FRACCIONADAS.*?TOTAL.*?OPERACIONES.*?FRACCIONADAS',
+                    r'OPERACIONES\s+FRACCIONADAS.*?TOTAL.*?FRACCIONADAS',
+                    r'FRACCIONADAS.*?TOTAL.*?FRACCIONADAS',
+                ]
+                for i, patron_alt in enumerate(patrones_alt):
+                    match_alt = re.search(patron_alt, texto, re.DOTALL | re.IGNORECASE)
+                    if match_alt:
+                        st.write(f"✅ Patrón alternativo {i+1} encontrado")
+                        match_seccion = match_alt
+                        break
+                    else:
+                        st.write(f"❌ Patrón alternativo {i+1} NO encontrado")
+        
+        if match_seccion:
+            seccion_texto = match_seccion.group(0)
+            if st.session_state.get('debug_mode', False):
+                st.write(f"✅ Sección específica encontrada ({len(seccion_texto)} caracteres)")
+                st.text_area("📄 Texto de la sección", seccion_texto, height=200, key=f"seccion_fraccionadas_{pdf_id}")
+            
+            # Procesar línea por línea en la sección
+            lineas_seccion = seccion_texto.split('\n')
+            i = 0
+            while i < len(lineas_seccion):
+                linea = lineas_seccion[i].strip()
+                
+                # Detectar inicio de operación por fecha en formato DD.MM.YYYY
+                if re.match(r'^\d{2}\.\d{2}\.\d{4}', linea):
+                    if st.session_state.get('debug_mode', False):
+                        st.write(f"📅 Fecha detectada: {linea}")
+                    
+                    try:
+                        # Reunir líneas hasta la siguiente fecha o fin de sección
+                        bloque_operacion = [linea]
+                        j = i + 1
+                        while j < len(lineas_seccion):
+                            siguiente_linea = lineas_seccion[j].strip()
+                            # Parar si encontramos otra fecha o línea de total
+                            if (re.match(r'^\d{2}\.\d{2}\.\d{4}', siguiente_linea) or 
+                                'TOTAL OPERACIONES' in siguiente_linea.upper()):
+                                break
+                            if siguiente_linea:  # Solo añadir líneas no vacías
+                                bloque_operacion.append(siguiente_linea)
+                            j += 1
+                        
+                        # Procesar el bloque completo de la operación
+                        texto_operacion = ' '.join(bloque_operacion)
+                        if st.session_state.get('debug_mode', False):
+                            st.write(f"🔍 Bloque operación: {texto_operacion}")
+                        
+                        # Extraer fecha
+                        fecha_match = re.search(r'(\d{2}\.\d{2}\.\d{4})', texto_operacion)
+                        fecha = fecha_match.group(1) if fecha_match else ""
+                        
+                        # Extraer concepto (entre fecha y primer número)
+                        concepto_match = re.search(r'\d{2}\.\d{2}\.\d{4}\s+(.+?)(?=\d+[,\.]\d{2})', texto_operacion)
+                        concepto = concepto_match.group(1).strip() if concepto_match else ""
+                        
+                        # Limpiar concepto
+                        concepto = re.sub(r'\s+', ' ', concepto)  # Normalizar espacios
+                        
+                        # Detectar conceptos válidos de operaciones fraccionadas
+                        if 'CAJ.LA CAIXA' in concepto.upper() or 'CAIXA' in concepto.upper():
+                            concepto = 'CAJ.LA CAIXA'
+                        elif 'COMERCIAL MAYORARTE' in concepto.upper() or 'MAYORARTE' in concepto.upper():
+                            concepto = 'COMERCIAL MAYORARTE'
+                        elif 'B.B.V.A' in concepto.upper() or 'BBVA' in concepto.upper():
+                            concepto = 'B.B.V.A.'
+                        elif concepto.upper().startswith('OF.') or len(concepto) < 4:
+                            # Probablemente es una línea de referencia, no una operación
+                            concepto = ""
+                        
+                        # Extraer números
+                        numeros = re.findall(self.PATRON_MONETARIO, texto_operacion)
+                        numeros_float = [self.parsear_importe(n) for n in numeros if n]
+                        
+                        # Buscar plazo
+                        plazo = ""
+                        plazo_match = re.search(r'(?:Plazo\s*[:\-]?\s*(\d+\s*De\s*\d+)|PRÓXIMO\s*PLAZO\s*[:\-]?\s*(\d{2}[\./-]\d{2}[\./-]\d{4}))', texto_operacion, re.IGNORECASE)
+                        if plazo_match:
+                            plazo = plazo_match.group(1) if plazo_match.group(1) else plazo_match.group(2)
+                            plazo = self.normalizar_plazo(plazo)
+                        
+                        # Validar que sea una operación real fraccionada
+                        es_operacion_valida = (
+                            len(numeros_float) >= 2 and 
+                            fecha and 
+                            concepto and
+                            # Debe tener concepto válido (no solo fecha)
+                            len(concepto) > 3 and
+                            # No debe ser línea de "Importe pendiente después"
+                            "importe pendiente" not in concepto.lower() and
+                            "liquidacion" not in concepto.lower() and
+                            # Debe tener importe operación significativo (mayor a 5€)
+                            numeros_float[0] >= 5.0 and
+                            # Si tiene varios números, el segundo debe ser significativo o cero
+                            (len(numeros_float) < 2 or numeros_float[1] >= 0)
+                        )
+                        
+                        if es_operacion_valida:
+                            operacion = {
+                                'fecha': fecha,
+                                'concepto': concepto,
+                                'importe_operacion': numeros_float[0],
+                                'importe_pendiente': numeros_float[1] if len(numeros_float) > 1 else 0.0,
+                                'capital_amortizado': numeros_float[2] if len(numeros_float) > 2 else 0.0,
+                                'intereses': numeros_float[3] if len(numeros_float) > 3 else 0.0,
+                                'cuota_mensual': numeros_float[4] if len(numeros_float) > 4 else 0.0,
+                                'plazo': plazo,
+                                'importe_pendiente_despues': 0.0,
+                                'debug_ctx': texto_operacion if st.session_state.get('debug_mode', False) else ''
+                            }
+                            operaciones.append(operacion)
+                            
+                            if st.session_state.get('debug_mode', False):
+                                st.write(f"✅ Operación VÁLIDA extraída: {fecha} - {concepto} - {numeros_float[0]:.2f}€ - Plazo: {plazo}")
+                        elif st.session_state.get('debug_mode', False):
+                            st.write(f"❌ Operación RECHAZADA: {fecha} - {concepto} - {numeros_float[0] if numeros_float else 'N/A'}€ (no cumple criterios de validación)")
+                        
+                        i = j  # Saltar al siguiente bloque
+                    
+                    except Exception as e:
+                        if st.session_state.get('debug_mode', False):
+                            st.write(f"❌ Error procesando operación: {e}")
+                        i += 1
+                else:
+                    i += 1
+            
+            if st.session_state.get('debug_mode', False):
+                st.write(f"🎯 Método 4 completado: {len(operaciones)} operaciones extraídas de la sección específica")
+        else:
+            if st.session_state.get('debug_mode', False):
+                st.error("❌ No se encontró la sección 'IMPORTE OPERACIONES FRACCIONADAS' → 'TOTAL OPERACIONES FRACCIONADAS'")
+        
+        # Debug detallado ANTES de deduplicar
+        if st.session_state.get('debug_mode', False):
+            st.write(f"🔢 Total operaciones fraccionadas ANTES de deduplicar: {len(operaciones)}")
+            if operaciones:
+                st.write("📋 Todas las operaciones encontradas:")
+                for i, op in enumerate(operaciones):
+                    st.write(f"**Operación #{i+1}:**")
+                    vista = {k: v for k, v in op.items() if k != 'debug_ctx'}
+                    st.json(vista)
+                    ctx = op.get('debug_ctx', '')
+                    if ctx:
+                        with st.expander(f"🔎 Contexto cercano #{i+1}"):
+                            st.text(ctx)
+                    else:
+                        st.write("⚠️ Sin contexto de debug capturado para esta operación")
+
+        # Deduplicar operaciones fraccionadas con clave más completa
         unicas = []
         vistos = set()
+        claves_analizadas = []
+        
         for op in operaciones:
-            clave = (op.get('fecha'), op.get('concepto','').strip().upper(), round(op.get('importe_operacion',0.0), 2), round(op.get('importe_pendiente',0.0), 2))
+            # Clave más robusta incluyendo capital amortizado e intereses
+            clave = (
+                op.get('fecha'), 
+                op.get('concepto','').strip().upper(), 
+                round(op.get('importe_operacion',0.0), 2), 
+                round(op.get('importe_pendiente',0.0), 2),
+                round(op.get('capital_amortizado',0.0), 2),
+                round(op.get('intereses',0.0), 2)
+            )
+            claves_analizadas.append(clave)
+            
             if clave not in vistos:
                 vistos.add(clave)
                 unicas.append(op)
 
         if st.session_state.get('debug_mode', False):
-            st.write(f"🔢 Total operaciones fraccionadas encontradas: {len(unicas)}")
+            st.write(f"🔢 Total operaciones fraccionadas DESPUÉS de deduplicar: {len(unicas)}")
+            
+            # Análisis detallado de duplicados
+            if len(operaciones) != len(unicas):
+                st.warning(f"⚠️ Se eliminaron {len(operaciones) - len(unicas)} duplicados")
+            
+            st.write("🔍 Análisis detallado de claves:")
+            for i, clave in enumerate(claves_analizadas):
+                estado = "✅ ÚNICO" if clave in [c for j, c in enumerate(claves_analizadas) if j <= i and claves_analizadas.count(c) == 1 or (claves_analizadas.count(c) > 1 and j == claves_analizadas.index(c))] else "❌ DUPLICADO"
+                st.text(f"Op #{i+1}: {estado} | {clave}")
+            
+            # Análisis específico si hay más de 3 operaciones
+            if len(unicas) > 3:
+                st.error(f"🚨 PROBLEMA: Se encontraron {len(unicas)} operaciones cuando deberían ser 3")
+                st.write("📊 Análisis por campos:")
+                fechas = [op.get('fecha') for op in unicas]
+                conceptos = [op.get('concepto','').strip().upper() for op in unicas] 
+                importes_op = [op.get('importe_operacion',0) for op in unicas]
+                
+                st.write(f"📅 Fechas: {fechas} (únicas: {len(set(fechas))})")
+                st.write(f"🏷️ Conceptos: {conceptos} (únicos: {len(set(conceptos))})")
+                st.write(f"💰 Importes operación: {importes_op} (únicos: {len(set(importes_op))})")
+            
             if unicas:
-                st.write("📋 Primeras operaciones:")
-                for i, op in enumerate(unicas[:3]):
-                    st.json(op)
+                st.write("📋 Operaciones finales (deduplicadas):")
+                for i, op in enumerate(unicas):
+                    vista = {k: v for k, v in op.items() if k != 'debug_ctx'}
+                    st.json(vista)
         
         return unicas
     
@@ -529,7 +723,7 @@ def reiniciar_aplicacion():
     st.rerun()
 
 def main():
-    st.title("📊 Convertidor de Extractos Bancarios PDF a Excel v2.6.3 ")
+    st.title("📊 Convertidor de Extractos Bancarios PDF a Excel v2.6.5.4 ")
     st.markdown("---")
     
     # Inicializar session_state para resultados
@@ -547,17 +741,19 @@ def main():
         st.session_state['debug_mode'] = False
     st.session_state['debug_mode'] = debug_mode
     
-    with st.expander("ℹ️ Información de la aplicación v2.4 ORIGINAL"):
+    with st.expander("ℹ️ Información de la aplicación"):
         st.markdown("""
-        **CÓDIGO ORIGINAL v2.4** - El que funcionaba antes de mis cambios
+        ### 📋 **Extracto PDF to Excel Converter**
         
-        **✅ CARACTERÍSTICAS:**
-        - 🔧 **Código exacto** que funcionaba correctamente
-        - 📊 **Patrones originales** sin modificaciones experimentales  
-        - ❌ **Sin hoja Resumen** (eliminada como pediste)
-        - 🎯 **Sin cambios de mi parte** - solo lo que funcionaba
+        **🎯 Funcionalidades principales:**
+        - 📄 **Procesamiento de PDFs bancarios** - Extrae automáticamente datos de extractos de tarjetas de crédito
+        - 📊 **Exportación a Excel** - Genera archivos .xlsx con dos hojas organizadas:
+          - *Operaciones Fraccionadas* - Compras a plazos y financiaciones
+          - *Operaciones del Período* - Transacciones regulares del mes
+        - 🔍 **Modo Debug avanzado** - Información detallada para diagnóstico y optimización
+        - 📱 **Interfaz intuitiva** - Carga múltiples archivos PDF de forma simultánea
         
-        **Si esto no funciona, el problema está en otro lado, no en mis cambios.**
+        **💡 Versión actual:** v2.6.5.1 con mejoras en extracción de plazos y deduplicación
         """)
     
     # Manejar limpieza de archivos
@@ -744,11 +940,29 @@ def main():
                         # Debug info si está activado
                         if debug_mode:
                             with st.expander(f"🔍 Debug info para {resultado['nombre_pdf']}"):
+                                st.write("### 📊 Resumen")
                                 st.json({
                                     'operaciones_fraccionadas': len(resultado['operaciones_fraccionadas']),
                                     'operaciones_periodo': len(resultado['operaciones_periodo']),
                                     'info_general': resultado['info_general']
                                 })
+                                
+                                st.write("### 🔍 Operaciones Fraccionadas Detalladas")
+                                if resultado['operaciones_fraccionadas']:
+                                    for i, op in enumerate(resultado['operaciones_fraccionadas']):
+                                        with st.expander(f"Operación #{i+1}: {op.get('fecha', 'N/A')} - {op.get('concepto', 'N/A')}"):
+                                            st.json(op)
+                                else:
+                                    st.warning("No se encontraron operaciones fraccionadas")
+                                
+                                st.write("### 📋 Operaciones del Período (primeras 5)")
+                                if resultado['operaciones_periodo']:
+                                    for i, op in enumerate(resultado['operaciones_periodo'][:5]):
+                                        st.json(op)
+                                    if len(resultado['operaciones_periodo']) > 5:
+                                        st.info(f"... y {len(resultado['operaciones_periodo']) - 5} más")
+                                else:
+                                    st.warning("No se encontraron operaciones del período")
                         
                         st.markdown("---")
                 
