@@ -408,21 +408,36 @@ class ExtractorExtractoBancario:
                         st.write(f"📅 Fecha detectada: {linea}")
                     
                     try:
-                        # Reunir líneas hasta la siguiente fecha o fin de sección
+                        # Reunir líneas hasta la siguiente fecha o fin de sección (EXPANDIDO PARA PLAZOS)
                         bloque_operacion = [linea]
                         j = i + 1
-                        while j < len(lineas_seccion):
+                        lineas_adicionales = 0
+                        max_lineas_busqueda = 5  # Buscar hasta 5 líneas adicionales para fechas de plazo
+                        
+                        while j < len(lineas_seccion) and lineas_adicionales < max_lineas_busqueda:
                             siguiente_linea = lineas_seccion[j].strip()
-                            # Parar si encontramos otra fecha o línea de total
-                            if (re.match(r'^\d{2}\.\d{2}\.\d{4}', siguiente_linea) or 
-                                'TOTAL OPERACIONES' in siguiente_linea.upper()):
+                            # Parar si encontramos otra fecha de operación
+                            if re.match(r'^\d{2}\.\d{2}\.\d{4}', siguiente_linea):
                                 break
-                            if siguiente_linea:  # Solo añadir líneas no vacías
-                                bloque_operacion.append(siguiente_linea)
+                            # Parar si encontramos línea de total
+                            if 'TOTAL OPERACIONES' in siguiente_linea.upper():
+                                break
+                            
+                            # Añadir línea actual
+                            bloque_operacion.append(siguiente_linea)
+                            
+                            # Si encontramos PRÓXIMO PLAZO, buscar unas líneas más para la fecha
+                            if 'PRÓXIMO' in siguiente_linea.upper() and 'PLAZO' in siguiente_linea.upper():
+                                lineas_adicionales = 0  # Resetear contador, buscar más
+                            else:
+                                lineas_adicionales += 1
+                                
                             j += 1
                         
                         # Procesar el bloque completo de la operación
-                        texto_operacion = ' '.join(bloque_operacion)
+                        texto_operacion = ' '.join(bloque_operacion).strip()
+                        # Limpiar espacios múltiples pero conservar el contenido
+                        texto_operacion = re.sub(r'\s+', ' ', texto_operacion)
                         if st.session_state.get('debug_mode', False):
                             st.write(f"🔍 Bloque operación: {texto_operacion}")
                         
@@ -430,7 +445,7 @@ class ExtractorExtractoBancario:
                         fecha_match = re.search(r'(\d{2}\.\d{2}\.\d{4})', texto_operacion)
                         fecha = fecha_match.group(1) if fecha_match else ""
                         
-                        # Extraer concepto (entre fecha y primer número)
+                        # Extraer concepto (entre fecha y primer número MONETARIO, excluyendo la fecha)
                         concepto_match = re.search(r'\d{2}\.\d{2}\.\d{4}\s+(.+?)(?=\d+[,\.]\d{2})', texto_operacion)
                         concepto = concepto_match.group(1).strip() if concepto_match else ""
                         
@@ -448,16 +463,96 @@ class ExtractorExtractoBancario:
                             # Probablemente es una línea de referencia, no una operación
                             concepto = ""
                         
-                        # Extraer números
-                        numeros = re.findall(self.PATRON_MONETARIO, texto_operacion)
+                        # Extraer números EXCLUYENDO la fecha al inicio
+                        # Buscar después de la fecha para evitar capturar DD.MM como importe
+                        texto_sin_fecha = re.sub(r'^\d{2}\.\d{2}\.\d{4}\s+', '', texto_operacion)
+                        numeros = re.findall(self.PATRON_MONETARIO, texto_sin_fecha)
                         numeros_float = [self.parsear_importe(n) for n in numeros if n]
                         
-                        # Buscar plazo
+                        if st.session_state.get('debug_mode', False):
+                            st.write(f"📝 Texto sin fecha: {texto_sin_fecha}")
+                            st.write(f"🔍 Patrón monetario usado: {self.PATRON_MONETARIO}")
+                            st.write(f"💰 Números encontrados: {numeros}")
+                            st.write(f"💰 Números convertidos: {numeros_float}")
+                            # Debug específico para cada número parseado
+                            for i, num in enumerate(numeros):
+                                parsed = self.parsear_importe(num)
+                                st.write(f"  Número {i+1}: '{num}' → {parsed}")
+                            # Debug específico para importe incorrecto
+                            if len(numeros_float) > 0 and (numeros_float[0] > 1000 and '150' in texto_sin_fecha):
+                                st.error(f"🚨 PROBLEMA DETECTADO: importe_operacion {numeros_float[0]} parece incorrecto para texto que contiene '150'")
+                                # Análisis detallado del primer número
+                                st.write(f"🔬 Análisis del primer número problemático:")
+                                st.write(f"  Texto original: '{numeros[0]}'")
+                                st.write(f"  Longitud: {len(numeros[0])}")
+                                st.write(f"  Caracteres: {[c for c in numeros[0]]}")
+                        
+                        # Buscar plazo - MEJORADO para PRÓXIMO PLAZO con debug extenso
                         plazo = ""
-                        plazo_match = re.search(r'(?:Plazo\s*[:\-]?\s*(\d+\s*De\s*\d+)|PRÓXIMO\s*PLAZO\s*[:\-]?\s*(\d{2}[\./-]\d{2}[\./-]\d{4}))', texto_operacion, re.IGNORECASE)
+                        
+                        if st.session_state.get('debug_mode', False):
+                            st.write(f"🔍 Buscando plazo en texto: {texto_operacion}")
+                            if 'PRÓXIMO' in texto_operacion.upper():
+                                st.write("✅ Palabra 'PRÓXIMO' encontrada")
+                            if 'PRÓXIMOPLAZO' in texto_operacion.upper():
+                                st.write("✅ Palabra 'PRÓXIMOPLAZO' (sin espacios) encontrada")
+                            if 'PLAZO' in texto_operacion.upper():
+                                st.write("✅ Palabra 'PLAZO' encontrada") 
+                            if 'De' in texto_operacion:
+                                st.write("✅ Palabra 'De' encontrada")
+                            # Buscar fechas en el texto
+                            fechas_en_texto = re.findall(r'\d{2}[\./-]\d{2}[\./-]\d{4}', texto_operacion)
+                            if fechas_en_texto:
+                                st.write(f"📅 Fechas encontradas en texto: {fechas_en_texto}")
+                        
+                        # Patrón mejorado para capturar PRÓXIMOPLAZO y fechas separadas
+                        plazo_match = re.search(r'(?:Plazo\s*[:\-]?\s*(\d+\s*De\s*\d+)|PRÓXIMO\s*PLAZO\s*[:\-]?\s*(\d{2}[\./-]\d{2}[\./-]\d{4})|PRÓXIMOPLAZO\s*(\d{2}[\./-]\d{2}[\./-]\d{4}))', texto_operacion, re.IGNORECASE)
+                        
                         if plazo_match:
-                            plazo = plazo_match.group(1) if plazo_match.group(1) else plazo_match.group(2)
-                            plazo = self.normalizar_plazo(plazo)
+                            if plazo_match.group(1):
+                                # Tipo: "Plazo 1 De 3"
+                                plazo = self.normalizar_plazo(plazo_match.group(1))
+                                if st.session_state.get('debug_mode', False):
+                                    st.write(f"✅ Plazo tipo 1 extraído: '{plazo}'")
+                            elif plazo_match.group(2):
+                                # Tipo: "PRÓXIMO PLAZO 01-02-2022" (con espacio)
+                                fecha_plazo = plazo_match.group(2)
+                                plazo = f"PRÓXIMO PLAZO {fecha_plazo}"
+                                if st.session_state.get('debug_mode', False):
+                                    st.write(f"✅ Plazo tipo 2 extraído: '{plazo}'")
+                            elif plazo_match.group(3):
+                                # Tipo: "PRÓXIMOPLAZO01-02-2022" (sin espacio)
+                                fecha_plazo = plazo_match.group(3)
+                                plazo = f"PRÓXIMO PLAZO {fecha_plazo}"
+                                if st.session_state.get('debug_mode', False):
+                                    st.write(f"✅ Plazo tipo 3 extraído: '{plazo}'")
+                        else:
+                            # Si no encuentra el patrón completo, buscar PRÓXIMO PLAZO y fecha por separado
+                            if 'PRÓXIMO' in texto_operacion.upper() or 'PRÓXIMOPLAZO' in texto_operacion.upper():
+                                # Buscar fechas EXCLUYENDO la fecha de la operación
+                                todas_las_fechas = re.findall(r'(\d{2}[\./-]\d{2}[\./-]\d{4})', texto_operacion)
+                                fecha_plazo_encontrada = None
+                                
+                                if st.session_state.get('debug_mode', False):
+                                    st.write(f"🔍 Todas las fechas en texto: {todas_las_fechas}")
+                                    st.write(f"🔍 Fecha de operación a excluir: {fecha}")
+                                
+                                # Buscar fecha que NO sea la fecha de la operación
+                                for fecha_candidata in todas_las_fechas:
+                                    if fecha_candidata != fecha:  # Excluir fecha de operación
+                                        fecha_plazo_encontrada = fecha_candidata
+                                        break
+                                
+                                if fecha_plazo_encontrada:
+                                    plazo = f"PRÓXIMO PLAZO {fecha_plazo_encontrada}"
+                                    if st.session_state.get('debug_mode', False):
+                                        st.write(f"✅ Plazo con fecha separada extraído: '{plazo}' (excluyendo fecha de operación)")
+                                else:
+                                    plazo = "PRÓXIMO PLAZO (fecha no encontrada)"
+                                    if st.session_state.get('debug_mode', False):
+                                        st.write(f"⚠️ PRÓXIMO PLAZO encontrado pero sin fecha válida en el bloque")
+                            elif st.session_state.get('debug_mode', False):
+                                st.write("❌ No se encontró ningún patrón de plazo")
                         
                         # Validar que sea una operación real fraccionada
                         es_operacion_valida = (
@@ -483,9 +578,7 @@ class ExtractorExtractoBancario:
                                 'importe_pendiente': numeros_float[1] if len(numeros_float) > 1 else 0.0,
                                 'capital_amortizado': numeros_float[2] if len(numeros_float) > 2 else 0.0,
                                 'intereses': numeros_float[3] if len(numeros_float) > 3 else 0.0,
-                                'cuota_mensual': numeros_float[4] if len(numeros_float) > 4 else 0.0,
                                 'plazo': plazo,
-                                'importe_pendiente_despues': 0.0,
                                 'debug_ctx': texto_operacion if st.session_state.get('debug_mode', False) else ''
                             }
                             operaciones.append(operacion)
@@ -701,8 +794,8 @@ def crear_excel(info_general: Dict, operaciones_fraccionadas: List[Dict], operac
     buffer = io.BytesIO()
     
     with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
-        # Siempre crear dos hojas con columnas estándar
-        cols_frac = ['fecha','concepto','importe_operacion','importe_pendiente','capital_amortizado','intereses','cuota_mensual','plazo','importe_pendiente_despues']
+        # Siempre crear dos hojas con columnas estándar - LIMPIADO
+        cols_frac = ['fecha','concepto','importe_operacion','importe_pendiente','capital_amortizado','intereses','plazo']
         cols_periodo = ['fecha','establecimiento','localidad','importe']
 
         df_fraccionadas = pd.DataFrame(operaciones_fraccionadas, columns=cols_frac)
@@ -719,11 +812,13 @@ def reiniciar_aplicacion():
     # Limpiar TODO el estado de session
     for key in list(st.session_state.keys()):
         del st.session_state[key]
+    # Asegurar que el flag de limpieza esté activo
+    st.session_state.force_clear = True
     # Forzar rerun completo
     st.rerun()
 
 def main():
-    st.title("📊 Convertidor de Extractos Bancarios PDF a Excel v2.6.5.4 ")
+    st.title("📊 Convertidor de Extractos Bancarios PDF a Excel v2.6.5.2 ")
     st.markdown("---")
     
     # Inicializar session_state para resultados
@@ -764,12 +859,15 @@ def main():
         st.session_state.limpiar_archivos = False
         st.rerun()
     
+    # File uploader con key dinámico para permitir reset COMPLETO
+    uploader_key = f"file_uploader_{st.session_state.get('force_clear', False)}_{id(st.session_state)}"
+    
     archivos_pdf = st.file_uploader(
         "📁 Selecciona uno o varios archivos PDF de extractos bancarios",
         type=['pdf'],
-        help="Sube uno o múltiples archivos PDF de tus extractos bancarios",
+        help="Sube uno o múltiple archivos PDF de tus extractos bancarios",
         accept_multiple_files=True,
-        key="file_uploader_main"
+        key=uploader_key
     )
     
     # Verificar si los archivos han cambiado
